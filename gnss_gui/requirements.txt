@@ -1,0 +1,4 @@
+PyQt5>=5.15
+paramiko>=2.11
+numpy>=1.20
+opencv-python>=4.5
