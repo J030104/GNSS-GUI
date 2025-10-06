@@ -11,8 +11,8 @@ from typing import Optional, Tuple
 
 import numpy as np
 
-from PyQt5.QtCore import Qt, QRectF, QPointF
-from PyQt5.QtGui import QPainter, QPen, QBrush, QColor
+from PyQt5.QtCore import Qt, QRectF, QPointF, QPoint, QRect
+from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QCursor
 from PyQt5.QtWidgets import QWidget
 
 
@@ -21,11 +21,14 @@ class MapViewer(QWidget):
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self.setMinimumSize(300, 300)
+        self.setMinimumSize(200, 200)
         # Normalised coordinates of rover within the map (0..1)
         self.rover_pos: Tuple[float, float] = (0.5, 0.5)
         # Orientation in degrees (0 = pointing up)
         self.rover_heading: float = 0.0
+        # Drag state
+        self._drag_active = False
+        self._drag_offset = QPoint(0, 0)
 
     def set_position(self, latitude: float, longitude: float) -> None:
         """Update rover position on the map.
@@ -85,3 +88,37 @@ class MapViewer(QWidget):
         painter.setBrush(QBrush(QColor(200, 0, 0)))
         painter.setPen(QPen(QColor(150, 0, 0)))
         painter.drawPolygon(*[QPointF(px, py) for px, py in transformed])
+
+    # --- Drag handlers --------------------------------------------------------
+    def mousePressEvent(self, event) -> None:  # type: ignore[override]
+        if event.button() == Qt.LeftButton:
+            self._drag_active = True
+            # store local offset so movement feels natural
+            self._drag_offset = event.pos()
+            self.setCursor(QCursor(Qt.ClosedHandCursor))
+        return super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # type: ignore[override]
+        # If dragging, move widget within parent coordinates
+        if self._drag_active:
+            parent = self.parentWidget()
+            if parent is not None:
+                # Compute new top-left in parent's coordinate space
+                top_left_global = event.globalPos() - self._drag_offset
+                new_pos = parent.mapFromGlobal(top_left_global)
+                # clamp to parent rect so it remains visible
+                x = max(0, min(new_pos.x(), parent.width() - self.width()))
+                y = max(0, min(new_pos.y(), parent.height() - self.height()))
+                self.move(x, y)
+            else:
+                # No parent: move using global coordinates
+                self.move(event.globalPos() - self._drag_offset)
+            return
+
+        return super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # type: ignore[override]
+        # Reset active flags and cursor
+        self._drag_active = False
+        self.setCursor(QCursor(Qt.ArrowCursor))
+        return super().mouseReleaseEvent(event)

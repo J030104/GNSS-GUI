@@ -13,7 +13,7 @@ from typing import Optional
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QMessageBox
 
-from ..components import VideoViewer, MapViewer, ControlPanel, LogViewer
+from ..components import VideoViewer, MapViewer, ControlPanel, LogViewer, ShellTabs
 from ..utilities.connection_manager import ConnectionManager, SSHConfig
 from ..utilities.video_streamer import VideoStreamer
 
@@ -26,27 +26,38 @@ class GNSSCommWidget(QWidget):
 
         # Components
         self.video_viewer = VideoViewer(fps=10)
-        self.map_viewer = MapViewer()
+        # Create a placeholder in the layout; the real MapViewer will be
+        # a floating child so the user can move/resize it without the
+        # layout snapping it back.
+        self.map_placeholder = QWidget()
+        self.map_viewer = MapViewer(parent=self)
         self.control_panel = ControlPanel()
         self.log_viewer = LogViewer()
+        # ShellTabs contains the log as the first non-closable tab
+        self.shell_tabs = ShellTabs(log_viewer=self.log_viewer)
 
         # Connection and streaming utilities
         self.connection = ConnectionManager(SSHConfig(host="jetson.local"))
-        self.video_streamer: Optional[VideoStreamer] = None
+        self.video_streamer = None
 
         # Layout configuration
         top_layout = QHBoxLayout()
         top_layout.addWidget(self.video_viewer, stretch=3)
-        top_layout.addWidget(self.map_viewer, stretch=2)
+        top_layout.addWidget(self.map_placeholder, stretch=2)
 
         bottom_layout = QHBoxLayout()
         bottom_layout.addWidget(self.control_panel, stretch=1)
-        bottom_layout.addWidget(self.log_viewer, stretch=2)
+        bottom_layout.addWidget(self.shell_tabs, stretch=2)
 
         main_layout = QVBoxLayout()
         main_layout.addLayout(top_layout, stretch=3)
         main_layout.addLayout(bottom_layout, stretch=2)
         self.setLayout(main_layout)
+
+        # Position the floating map over the placeholder area so the initial
+        # layout looks unchanged. Do this after the event loop runs so the
+        # layout has finalised widget geometries.
+        QTimer.singleShot(0, self._place_map_over_placeholder)
 
         # Connect control panel signals to actions
         self.control_panel.cameraChanged.connect(self.on_camera_changed)
@@ -68,6 +79,17 @@ class GNSSCommWidget(QWidget):
         self.bandwidth_timer = QTimer(self)
         self.bandwidth_timer.timeout.connect(self.update_bandwidth)
         self.bandwidth_timer.start(1000)
+
+    def _place_map_over_placeholder(self) -> None:
+        """Place the floating MapViewer over the placeholder widget."""
+        try:
+            geom = self.map_placeholder.geometry()
+            self.map_viewer.setGeometry(geom)
+            self.map_viewer.show()
+            self.map_viewer.raise_()
+        except Exception:
+            # Be defensive in case widget hasn't been laid out for some reason
+            pass
 
     # Slot implementations
     def on_camera_changed(self, camera_name: str) -> None:

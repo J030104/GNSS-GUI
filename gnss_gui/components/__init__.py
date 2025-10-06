@@ -11,6 +11,7 @@ from .map_viewer import MapViewer
 from .control_panel import ControlPanel
 from .status_bar import StatusBar
 from .log_viewer import LogViewer
+from .shell_tabs import ShellTabs
 
 __all__ = [
     "VideoViewer",
@@ -18,4 +19,5 @@ __all__ = [
     "ControlPanel",
     "StatusBar",
     "LogViewer",
+    "ShellTabs",
 ]
