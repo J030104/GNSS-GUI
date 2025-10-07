@@ -4,16 +4,17 @@
 
 ### Visual (map included)
 1. Scroll to zoom in + right click and hold to shift 
+2. Link camera streams to the control panel
 
 ### Bottom
-1. 
+1. Move time and connection status to the top
 
 ### Bottom Right (shells)
 1. Strange tab autocomplete
 2. 
 
 ### Bottom Left (control)
-
+1. Refine the grouping and ordering
 
 ### Notes
 1. Shell tab tiling may still contain bug
