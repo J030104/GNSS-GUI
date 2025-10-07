@@ -3,14 +3,18 @@
 2. Signal quality
 
 ### Visual (map included)
-1. Fix - Map can't be resized
-2. Scroll to zoom in + right click and hold to shift
-3.  
+1. Scroll to zoom in + right click and hold to shift 
+
+### Bottom
+1. 
 
 ### Bottom Right (shells)
 1. Strange tab autocomplete
-2. Missing close button (`exit` works)
+2. 
 
 ### Bottom Left (control)
-1. Multiple tabs
-2. Ensure settings for each cam is well preserved
+
+
+### Notes
+1. Shell tab tiling may still contain bug
+2. Toolbar on the top, right under the current tab has not yet available so it's commented out.

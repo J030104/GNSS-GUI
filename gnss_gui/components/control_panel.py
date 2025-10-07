@@ -44,7 +44,10 @@ class ControlPanel(QWidget):
         camera_layout = QHBoxLayout()
         camera_label = QLabel("Camera:")
         self.camera_combo = QComboBox()
-        self.camera_combo.addItems(["Camera 1", "Camera 2", "Camera 3", "Insta 360"])
+        # Include a Local camera option for the device's default camera.
+        # The string value here is presented to users; consumers map it to
+        # underlying device names (e.g. 'local' -> local camera).
+        self.camera_combo.addItems(["Local", "Camera 1", "Camera 2", "Camera 3", "Insta 360"])
         # handle saving/loading when selection changes
         self.camera_combo.currentTextChanged.connect(self._on_camera_changed)
         camera_layout.addWidget(camera_label)

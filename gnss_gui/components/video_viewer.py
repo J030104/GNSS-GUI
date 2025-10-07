@@ -24,6 +24,8 @@ from PyQt5.QtWidgets import (
 
 import numpy as np
 
+from ..utilities.video_streamer import CameraSource
+
 
 class VideoViewer(QWidget):
     """A widget that displays video frames.
@@ -49,7 +51,7 @@ class VideoViewer(QWidget):
         self.setLayout(layout)
 
         # placeholder frame data
-        self._placeholder_size = (320, 240)
+        self._placeholder_size = (320, 320)
 
         # Start a timer to periodically update the frame
         self._timer = QTimer(self)
@@ -57,7 +59,43 @@ class VideoViewer(QWidget):
         self._timer.start(int(1000 / self.fps))
 
         # Frame generator function; can be overridden later
+        # By default use placeholder generator; callers may set
+        # ``video_viewer.attach_camera(camera_source)`` to attach a
+        # CameraSource instance which will be polled for real frames.
         self.frame_generator = self._generate_placeholder_frame
+        self._camera_source: Optional[CameraSource] = None
+
+    def attach_camera(self, source: Optional[CameraSource]) -> None:
+        """Attach a CameraSource to the viewer.
+
+        If ``source`` is ``None`` the viewer will fall back to the
+        placeholder frame generator.  When a source is attached the
+        viewer calls ``start()`` on it and polls ``read_frame`` for
+        frames.
+        """
+        # Do not stop the previously attached camera; keep it running so
+        # switching back is instant. Just replace the pointer we use for
+        # rendering. This trades a small amount of resource usage for
+        # responsiveness during development/testing.
+        prev = self._camera_source
+        self._camera_source = source
+        if source is None:
+            self.frame_generator = self._generate_placeholder_frame
+        else:
+            try:
+                # Start the source if it defines a start method and appears
+                # not to be already running. Implementations should make
+                # start() idempotent; we call it defensively here.
+                try:
+                    source.start()
+                except Exception:
+                    pass
+                self.frame_generator = source.read_frame
+            except Exception:
+                # If attaching the source fails, restore previous source
+                # pointer and fall back to placeholder
+                self._camera_source = prev
+                self.frame_generator = self._generate_placeholder_frame
 
     def _on_timer(self) -> None:
         """Refresh the displayed frame.
