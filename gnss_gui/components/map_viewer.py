@@ -29,6 +29,14 @@ class MapViewer(QWidget):
         # Drag state
         self._drag_active = False
         self._drag_offset = QPoint(0, 0)
+        # Resize state
+        self._resizing = False
+        self._resize_start_global = QPoint(0, 0)
+        self._initial_size = self.size()
+        # Size (in pixels) of the draggable grip area in the bottom-right corner
+        self._resize_grip_size = 12
+        # Track the mouse even when no button is pressed so we can change cursor
+        self.setMouseTracking(True)
 
     def set_position(self, latitude: float, longitude: float) -> None:
         """Update rover position on the map.
@@ -89,9 +97,25 @@ class MapViewer(QWidget):
         painter.setPen(QPen(QColor(150, 0, 0)))
         painter.drawPolygon(*[QPointF(px, py) for px, py in transformed])
 
+        # Draw a small resize grip in the bottom-right corner
+        grip_size = self._resize_grip_size
+        grip_rect = QRect(self.width() - grip_size - 2, self.height() - grip_size - 2, grip_size, grip_size)
+        painter.setBrush(QBrush(QColor(220, 220, 220)))
+        painter.setPen(QPen(QColor(160, 160, 160)))
+        painter.drawRect(grip_rect)
+
     # --- Drag handlers --------------------------------------------------------
     def mousePressEvent(self, event) -> None:  # type: ignore[override]
         if event.button() == Qt.LeftButton:
+            # If click is in the resize grip, start resizing instead of dragging
+            if self._in_resize_area(event.pos()):
+                self._resizing = True
+                self._resize_start_global = event.globalPos()
+                self._initial_size = self.size()
+                self.setCursor(QCursor(Qt.SizeFDiagCursor))
+                return
+
+            # Otherwise start dragging the widget
             self._drag_active = True
             # store local offset so movement feels natural
             self._drag_offset = event.pos()
@@ -99,6 +123,21 @@ class MapViewer(QWidget):
         return super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:  # type: ignore[override]
+        # If resizing, adjust the widget size based on mouse movement
+        if self._resizing:
+            parent = self.parentWidget()
+            delta = event.globalPos() - self._resize_start_global
+            new_w = max(self.minimumWidth(), self._initial_size.width() + delta.x())
+            new_h = max(self.minimumHeight(), self._initial_size.height() + delta.y())
+            # If we have a parent, clamp so the widget doesn't escape the parent
+            if parent is not None:
+                max_w = parent.width() - self.x()
+                max_h = parent.height() - self.y()
+                new_w = min(new_w, max_w)
+                new_h = min(new_h, max_h)
+            self.resize(new_w, new_h)
+            return
+
         # If dragging, move widget within parent coordinates
         if self._drag_active:
             parent = self.parentWidget()
@@ -115,10 +154,31 @@ class MapViewer(QWidget):
                 self.move(event.globalPos() - self._drag_offset)
             return
 
+        # Not dragging nor resizing: update cursor if hovering over grip
+        if self._in_resize_area(event.pos()):
+            self.setCursor(QCursor(Qt.SizeFDiagCursor))
+        else:
+            self.setCursor(QCursor(Qt.ArrowCursor))
+
         return super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:  # type: ignore[override]
         # Reset active flags and cursor
         self._drag_active = False
+        if self._resizing:
+            self._resizing = False
+            self.setCursor(QCursor(Qt.ArrowCursor))
+            return
+
         self.setCursor(QCursor(Qt.ArrowCursor))
         return super().mouseReleaseEvent(event)
+
+    def _in_resize_area(self, pos: QPoint) -> bool:
+        """Return True if a QPoint (widget-local) is inside the bottom-right grip."""
+        return pos.x() >= self.width() - self._resize_grip_size and pos.y() >= self.height() - self._resize_grip_size
+
+    def leaveEvent(self, event) -> None:  # type: ignore[override]
+        # Restore default cursor when leaving widget bounds (unless actively dragging/resizing)
+        if not (self._drag_active or self._resizing):
+            self.setCursor(QCursor(Qt.ArrowCursor))
+        return super().leaveEvent(event)
