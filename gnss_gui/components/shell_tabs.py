@@ -205,7 +205,7 @@ class ShellTabs(QTabWidget):
             log_viewer = LogViewer()
         self._log = log_viewer
         self.addTab(self._log, 'Log')
-        self.setTabsClosable(False)
+        # self.setTabsClosable(False)
 
         # Add a small add-button in the corner to create new shells
         btn = QPushButton('+')
