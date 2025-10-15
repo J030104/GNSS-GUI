@@ -48,6 +48,8 @@ class VideoViewer(QWidget):
         self.label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
         layout.addWidget(self.label)
         self.setLayout(layout)
 

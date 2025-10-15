@@ -18,6 +18,17 @@ class VideoLayoutTabWidget(QWidget):
         self.tab_widget.setTabPosition(QTabWidget.West)
         self.tab_widget.setMovable(False)
         self.tab_widget.setDocumentMode(True)
+        # Remove tab widget styling to minimize gaps
+        self.tab_widget.setStyleSheet("""
+            QTabWidget::pane {
+                border: 5px;
+                margin: 0px;
+                padding: 0px;
+            }
+            QTabWidget::tab-bar {
+                alignment: left;
+            }
+        """)
         self._layouts = layouts
         self._video_viewers = []  # type: List[List[VideoViewer]]
         self._init_tabs()
@@ -31,8 +42,8 @@ class VideoLayoutTabWidget(QWidget):
         for layout_def in self._layouts:
             tab = QWidget()
             grid = QGridLayout()
-            grid.setContentsMargins(4, 4, 4, 4)
-            grid.setSpacing(6)
+            grid.setContentsMargins(0, 0, 0, 0)
+            grid.setSpacing(2)
             viewers = []
             for i, box in enumerate(layout_def['boxes']):
                 camera_name = box.get('camera_name', f"{layout_def['name']} Cam {i+1}")
