@@ -254,6 +254,19 @@ class VideoViewer(QWidget):
         self._pan_x = 0.5
         self._pan_y = 0.5
 
+    def get_pan(self) -> tuple:
+        """Return the current normalized pan (pan_x, pan_y) in [0,1]."""
+        return (float(self._pan_x), float(self._pan_y))
+
+    def set_pan(self, x: float, y: float) -> None:
+        """Set the current normalized pan (clamped to [0,1])."""
+        try:
+            self._pan_x = min(max(0.0, float(x)), 1.0)
+            self._pan_y = min(max(0.0, float(y)), 1.0)
+        except Exception:
+            self._pan_x = 0.5
+            self._pan_y = 0.5
+
     # --- Mouse handling for panning when zoomed ---
     def mousePressEvent(self, event):  # type: ignore[override]
         if event.button() == Qt.LeftButton and getattr(self, '_zoom', 1.0) > 1.0:

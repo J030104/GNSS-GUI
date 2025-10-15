@@ -286,6 +286,60 @@ class GNSSCommWidget(QWidget):
                 except Exception:
                     pass
 
+        # Update camera state attached_viewers lists so subsequent
+        # adjustments affect all viewers that are currently displaying
+        # a given stream. We ensure any viewers we attached above are
+        # recorded, and remove viewers that are no longer attached.
+        try:
+            all_viewers = self.video_layout_tabs.get_all_video_viewers()
+            # build reverse map viewer -> matched_key
+            viewer_map = {}
+            for key, state in self._camera_states.items():
+                if not state.get('streaming'):
+                    continue
+                attached = state.get('attached_viewers') or []
+                # refresh attached list by checking which of the viewers
+                # currently reference this state's source
+                new_attached = []
+                for v in all_viewers:
+                    try:
+                        # if the viewer currently has a camera source that
+                        # equals this state's source, consider it attached
+                        if getattr(v, '_camera_source', None) is state.get('source'):
+                            new_attached.append(v)
+                    except Exception:
+                        pass
+                state['attached_viewers'] = new_attached
+                for v in new_attached:
+                    viewer_map[v] = key
+
+            # For each camera state, copy pan/zoom/brightness from the
+            # first attached viewer to any newly attached viewers so
+            # they match the live appearance.
+            for key, state in self._camera_states.items():
+                attached = state.get('attached_viewers') or []
+                if not attached:
+                    continue
+                # use first attached viewer as source of truth
+                src = attached[0]
+                try:
+                    pan_x, pan_y = src.get_pan()
+                except Exception:
+                    pan_x, pan_y = (0.5, 0.5)
+                try:
+                    # copy settings to all attached viewers
+                    for v in attached[1:]:
+                        try:
+                            v.set_zoom(int(src._zoom))
+                            v.set_brightness(int(src._brightness))
+                            v.set_pan(pan_x, pan_y)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     def on_bitrate_changed(self, value: int) -> None:
         self.log_viewer.append(f"Bitrate set to {value} kbps")
         # If a stream is active, adjust bitrate (not implemented)
