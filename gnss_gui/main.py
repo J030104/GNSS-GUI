@@ -28,6 +28,10 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("URC Rover Control GUI")
         self.resize(1200, 800)
+        
+        # Set reasonable size constraints to prevent window from growing too large
+        self.setMinimumSize(800, 600)
+        self.setMaximumSize(1920, 1080)
 
         # Create tab widget for subsystems
         self.tabs = QTabWidget()

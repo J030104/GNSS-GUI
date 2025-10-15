@@ -39,9 +39,10 @@ class VideoViewer(QWidget):
         should match the incoming frame rate.
     """
 
-    def __init__(self, fps: int = 10, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, fps: int = 10, parent: Optional[QWidget] = None, camera_name: str = "Camera") -> None:
         super().__init__(parent)
         self.fps = fps
+        self.camera_name = camera_name
         self.label = QLabel(self)
         self.label.setAlignment(Qt.AlignCenter)
         self.label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -50,8 +51,12 @@ class VideoViewer(QWidget):
         layout.addWidget(self.label)
         self.setLayout(layout)
 
+        # Allow video boxes to stretch to fill available space
+        self.setMinimumSize(160, 120)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
         # placeholder frame data
-        self._placeholder_size = (320, 320)
+        self._placeholder_size = (160, 120)
 
         # Start a timer to periodically update the frame
         self._timer = QTimer(self)
@@ -64,6 +69,10 @@ class VideoViewer(QWidget):
         # CameraSource instance which will be polled for real frames.
         self.frame_generator = self._generate_placeholder_frame
         self._camera_source: Optional[CameraSource] = None
+        self._show_text_placeholder = True
+        
+        # Set initial text placeholder
+        self._show_text_placeholder_message()
 
     def attach_camera(self, source: Optional[CameraSource]) -> None:
         """Attach a CameraSource to the viewer.
@@ -81,7 +90,10 @@ class VideoViewer(QWidget):
         self._camera_source = source
         if source is None:
             self.frame_generator = self._generate_placeholder_frame
+            self._show_text_placeholder = True
+            self._show_text_placeholder_message()
         else:
+            self._show_text_placeholder = False
             try:
                 # Start the source if it defines a start method and appears
                 # not to be already running. Implementations should make
@@ -96,6 +108,8 @@ class VideoViewer(QWidget):
                 # pointer and fall back to placeholder
                 self._camera_source = prev
                 self.frame_generator = self._generate_placeholder_frame
+                self._show_text_placeholder = True
+                self._show_text_placeholder_message()
 
     def _on_timer(self) -> None:
         """Refresh the displayed frame.
@@ -104,9 +118,33 @@ class VideoViewer(QWidget):
         next frame from the configured frame generator and updates the
         QLabel.
         """
+        if self._show_text_placeholder:
+            # Don't update when showing text placeholder
+            return
+            
         frame = self.frame_generator()
         if frame is not None:
             self.update_frame(frame)
+
+    def _show_text_placeholder_message(self) -> None:
+        """Show a text message when no video stream is active."""
+        self.label.clear()
+        self.label.setText(f"{self.camera_name}\nUnavailable")
+        self.label.setStyleSheet("""
+            QLabel {
+                background-color: #2b2b2b;
+                color: #ffffff;
+                border: 1px solid #555555;
+                font-size: 12px;
+                font-weight: bold;
+            }
+        """)
+
+    def set_camera_name(self, name: str) -> None:
+        """Set the camera name for display in placeholder."""
+        self.camera_name = name
+        if self._show_text_placeholder:
+            self._show_text_placeholder_message()
 
     def _generate_placeholder_frame(self) -> np.ndarray:
         """Generate a pseudo‑random image for demonstration purposes.
@@ -132,6 +170,9 @@ class VideoViewer(QWidget):
         frame : np.ndarray
             A ``(H, W, 3)`` array of uint8 representing an RGB image.
         """
+        # Clear any text styling when showing video
+        self.label.setStyleSheet("")
+        
         # Convert NumPy array to QImage
         h, w, c = frame.shape
         bytes_per_line = c * w
