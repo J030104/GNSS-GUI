@@ -77,7 +77,7 @@ class GNSSCommWidget(QWidget):
         # Button container at the top
         button_container = QWidget()
         button_layout = QHBoxLayout()
-        button_layout.setContentsMargins(5, 5, 5, 0)
+        button_layout.setContentsMargins(0, 0, 0, 0)
         button_layout.addWidget(self.map_toggle_button)
         button_layout.addStretch()
         button_container.setLayout(button_layout)
@@ -89,9 +89,14 @@ class GNSSCommWidget(QWidget):
         # Create bottom widget for control panel and shell tabs
         bottom_widget = QWidget()
         bottom_layout = QHBoxLayout()
+        bottom_layout.setContentsMargins(1, 1, 1, 1)  # Reduce margins for tighter fit
         bottom_layout.addWidget(self.control_panel, stretch=1)
         bottom_layout.addWidget(self.shell_tabs, stretch=2)
         bottom_widget.setLayout(bottom_layout)
+        
+        # Set minimum sizes for individual components
+        self.control_panel.setMinimumHeight(60)
+        self.shell_tabs.setMinimumHeight(60)
 
         # Create vertical splitter for resizable sections
         splitter = QSplitter(Qt.Vertical)
@@ -99,6 +104,14 @@ class GNSSCommWidget(QWidget):
         splitter.addWidget(bottom_widget)
         splitter.setStretchFactor(0, 3)  # Top section gets more space
         splitter.setStretchFactor(1, 1)  # Bottom section gets less space
+        
+        # Set minimum sizes to control collapse behavior
+        top_widget.setMinimumHeight(300)  # Video section minimum
+        bottom_widget.setMinimumHeight(180)  # Lower minimum for control panel section
+        
+        # Configure splitter behavior
+        splitter.setCollapsible(0, False)  # Prevent video section from collapsing completely
+        splitter.setCollapsible(1, True)   # Allow control panel section to collapse
 
         main_layout = QVBoxLayout()
         main_layout.addWidget(splitter)

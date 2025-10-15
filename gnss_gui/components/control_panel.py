@@ -21,6 +21,7 @@ from PyQt5.QtWidgets import (
     QGroupBox,
     QFormLayout,
     QSpinBox,
+    QScrollArea,
 )
 
 
@@ -57,9 +58,39 @@ class ControlPanel(QWidget):
         # Tab widget groups controls for easier navigation
         self.tabs = QTabWidget()
 
-        # Video tab
-        video_tab = QWidget()
-        video_layout = QVBoxLayout()
+        # Basic tab - combines video, image, and stream controls
+        basic_tab = QWidget()
+        basic_layout = QVBoxLayout()
+        
+        # Create a scroll area for the content
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        
+        # Create a widget to hold all the scrollable content
+        scroll_content = QWidget()
+        scroll_content_layout = QVBoxLayout()
+        
+        # Stream controls at the top
+        stream_btns = QHBoxLayout()
+        self.start_button = QPushButton("Start Stream")
+        self.stop_button = QPushButton("Stop Stream")
+        # use local handlers so we can track per-camera state
+        self.start_button.clicked.connect(self._on_start_stream)
+        self.stop_button.clicked.connect(self._on_stop_stream)
+        stream_btns.addWidget(self.start_button)
+        stream_btns.addWidget(self.stop_button)
+        scroll_content_layout.addLayout(stream_btns)
+
+        status_layout = QHBoxLayout()
+        self.bandwidth_label = QLabel("Bandwidth: -- kbps")
+        self.conn_status_label = QLabel("Connection: Disconnected")
+        status_layout.addWidget(self.bandwidth_label)
+        status_layout.addWidget(self.conn_status_label)
+        scroll_content_layout.addLayout(status_layout)
+
+        # Video controls
         bitrate_group = QGroupBox("Video bitrate (kbps)")
         bitrate_form = QFormLayout()
         self.bitrate_slider = QSlider(Qt.Horizontal)
@@ -68,13 +99,9 @@ class ControlPanel(QWidget):
         bitrate_form.addRow(self.bitrate_slider)
         bitrate_group.setLayout(bitrate_form)
         self.bitrate_slider.valueChanged.connect(self._on_bitrate_changed)
-        video_layout.addWidget(bitrate_group)
-        video_layout.addStretch(1)
-        video_tab.setLayout(video_layout)
+        scroll_content_layout.addWidget(bitrate_group)
 
-        # Image tab
-        image_tab = QWidget()
-        image_layout = QVBoxLayout()
+        # Image controls
         brightness_group = QGroupBox("Brightness")
         brightness_form = QFormLayout()
         self.brightness_slider = QSlider(Qt.Horizontal)
@@ -83,7 +110,7 @@ class ControlPanel(QWidget):
         brightness_form.addRow(self.brightness_slider)
         brightness_group.setLayout(brightness_form)
         self.brightness_slider.valueChanged.connect(self._on_brightness_changed)
-        image_layout.addWidget(brightness_group)
+        scroll_content_layout.addWidget(brightness_group)
 
         zoom_group = QGroupBox("Zoom")
         zoom_form = QFormLayout()
@@ -93,37 +120,44 @@ class ControlPanel(QWidget):
         zoom_form.addRow(self.zoom_slider)
         zoom_group.setLayout(zoom_form)
         self.zoom_slider.valueChanged.connect(self._on_zoom_changed)
-        image_layout.addWidget(zoom_group)
+        scroll_content_layout.addWidget(zoom_group)
 
-        image_layout.addStretch(1)
-        image_tab.setLayout(image_layout)
+        scroll_content_layout.addStretch(1)
+        scroll_content.setLayout(scroll_content_layout)
+        
+        # Set the scroll content widget to the scroll area
+        scroll_area.setWidget(scroll_content)
+        
+        # Add the scroll area to the basic tab layout
+        basic_layout.addWidget(scroll_area)
+        basic_tab.setLayout(basic_layout)
 
-        # Stream tab
-        stream_tab = QWidget()
-        stream_layout = QVBoxLayout()
-        stream_btns = QHBoxLayout()
-        self.start_button = QPushButton("Start Stream")
-        self.stop_button = QPushButton("Stop Stream")
-        # use local handlers so we can track per-camera state
-        self.start_button.clicked.connect(self._on_start_stream)
-        self.stop_button.clicked.connect(self._on_stop_stream)
-        stream_btns.addWidget(self.start_button)
-        stream_btns.addWidget(self.stop_button)
-        stream_layout.addLayout(stream_btns)
+        # Advanced tab - empty for now
+        advanced_tab = QWidget()
+        advanced_layout = QVBoxLayout()
+        
+        # Create a scroll area for the advanced tab content
+        advanced_scroll_area = QScrollArea()
+        advanced_scroll_area.setWidgetResizable(True)
+        advanced_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        advanced_scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        
+        # Create a widget to hold the advanced tab content
+        advanced_scroll_content = QWidget()
+        advanced_scroll_content_layout = QVBoxLayout()
+        advanced_scroll_content_layout.addWidget(QLabel("Advanced controls coming soon..."))
+        advanced_scroll_content_layout.addStretch(1)
+        advanced_scroll_content.setLayout(advanced_scroll_content_layout)
+        
+        # Set the scroll content widget to the scroll area
+        advanced_scroll_area.setWidget(advanced_scroll_content)
+        
+        # Add the scroll area to the advanced tab layout
+        advanced_layout.addWidget(advanced_scroll_area)
+        advanced_tab.setLayout(advanced_layout)
 
-        status_layout = QHBoxLayout()
-        self.bandwidth_label = QLabel("Bandwidth: -- kbps")
-        self.conn_status_label = QLabel("Connection: Disconnected")
-        status_layout.addWidget(self.bandwidth_label)
-        status_layout.addWidget(self.conn_status_label)
-        stream_layout.addLayout(status_layout)
-
-        stream_layout.addStretch(1)
-        stream_tab.setLayout(stream_layout)
-
-        self.tabs.addTab(video_tab, "Video")
-        self.tabs.addTab(image_tab, "Image")
-        self.tabs.addTab(stream_tab, "Stream")
+        self.tabs.addTab(basic_tab, "Basic")
+        self.tabs.addTab(advanced_tab, "Advanced")
 
         layout.addWidget(self.tabs)
 
