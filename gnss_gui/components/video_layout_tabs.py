@@ -66,6 +66,13 @@ class VideoLayoutTabWidget(QWidget):
             tab_index = self.tab_widget.currentIndex()
         return self._video_viewers[tab_index]
 
+    def get_all_video_viewers(self) -> List[VideoViewer]:
+        """Return a flat list of all VideoViewer instances across all tabs."""
+        viewers = []
+        for vlist in self._video_viewers:
+            viewers.extend(vlist)
+        return viewers
+
     def add_layout(self, layout_def: Dict[str, Any]):
         """Add a new layout tab at runtime."""
         self._layouts.append(layout_def)

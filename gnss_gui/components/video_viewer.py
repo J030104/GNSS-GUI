@@ -72,7 +72,19 @@ class VideoViewer(QWidget):
         self.frame_generator = self._generate_placeholder_frame
         self._camera_source: Optional[CameraSource] = None
         self._show_text_placeholder = True
-        
+
+        # Image adjustment state
+        # brightness: integer offset added to each channel (-50..50)
+        self._brightness = 0
+        # zoom: 1..n; when >1 we crop then scale. Stored as float for math.
+        self._zoom = 1.0
+        # pan: normalized top-left fraction (0..1) of the crop window
+        self._pan_x = 0.5
+        self._pan_y = 0.5
+        # dragging state for mouse panning
+        self._dragging = False
+        self._drag_start_pos = None
+
         # Set initial text placeholder
         self._show_text_placeholder_message()
 
@@ -174,11 +186,44 @@ class VideoViewer(QWidget):
         """
         # Clear any text styling when showing video
         self.label.setStyleSheet("")
-        
+
+        # Apply brightness and zoom/pan to a working copy of the frame
+        try:
+            working = frame.astype(np.int16, copy=True)
+        except Exception:
+            # Fallback if dtype conversions fail
+            working = frame.copy()
+
+        # Brightness: add offset then clip
+        if getattr(self, '_brightness', 0) != 0:
+            working = working + int(self._brightness)
+            np.clip(working, 0, 255, out=working)
+
+        # Convert back to uint8 for later operations
+        working = working.astype(np.uint8)
+
+        h, w, c = working.shape
+
+        # Zoom / crop
+        z = max(1.0, float(self._zoom))
+        if z > 1.0:
+            cw = max(1, int(round(w / z)))
+            ch = max(1, int(round(h / z)))
+            # Compute top-left based on normalized pan (centered by default)
+            max_x = max(0, w - cw)
+            max_y = max(0, h - ch)
+            # pan_x, pan_y are normalized center positions in [0,1]
+            # Convert to top-left
+            tx = int(round((self._pan_x) * max_x))
+            ty = int(round((self._pan_y) * max_y))
+            # Ensure within bounds
+            tx = min(max(0, tx), max_x)
+            ty = min(max(0, ty), max_y)
+            working = working[ty:ty + ch, tx:tx + cw]
+
         # Convert NumPy array to QImage
-        h, w, c = frame.shape
-        bytes_per_line = c * w
-        image = QImage(frame.data.tobytes(), w, h, bytes_per_line, QImage.Format_RGB888)
+        bytes_per_line = c * working.shape[1]
+        image = QImage(working.data.tobytes(), working.shape[1], working.shape[0], bytes_per_line, QImage.Format_RGB888)
         pixmap = QPixmap.fromImage(image)
         self.label.setPixmap(pixmap.scaled(self.label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
 
@@ -187,3 +232,61 @@ class VideoViewer(QWidget):
         if (pixmap := self.label.pixmap()) is not None:
             self.label.setPixmap(pixmap.scaled(self.label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
         super().resizeEvent(event)
+
+    # --- Public APIs for adjustments ---
+    def set_brightness(self, value: int) -> None:
+        """Set brightness offset (-50..50)."""
+        try:
+            self._brightness = int(value)
+        except Exception:
+            self._brightness = 0
+
+    def set_zoom(self, value: int) -> None:
+        """Set zoom factor (1..n). Resets pan to center when zoom changes."""
+        try:
+            z = float(value)
+            if z < 1.0:
+                z = 1.0
+            self._zoom = z
+        except Exception:
+            self._zoom = 1.0
+        # center pan when zoom changes
+        self._pan_x = 0.5
+        self._pan_y = 0.5
+
+    # --- Mouse handling for panning when zoomed ---
+    def mousePressEvent(self, event):  # type: ignore[override]
+        if event.button() == Qt.LeftButton and getattr(self, '_zoom', 1.0) > 1.0:
+            self._dragging = True
+            self._drag_start_pos = event.pos()
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):  # type: ignore[override]
+        if self._dragging and self._drag_start_pos is not None:
+            # Compute delta in widget coordinates
+            dx = event.pos().x() - self._drag_start_pos.x()
+            dy = event.pos().y() - self._drag_start_pos.y()
+            lw = max(1, self.label.width())
+            lh = max(1, self.label.height())
+            # Translate widget pixel delta to pan fraction
+            # moving right should shift crop left (show area to the right)
+            delta_pan_x = -dx / lw
+            delta_pan_y = -dy / lh
+            # Scale delta by inverse zoom so dragging speed feels natural
+            inv_zoom = 1.0 / max(1.0, float(self._zoom))
+            self._pan_x = min(max(0.0, self._pan_x + delta_pan_x * inv_zoom), 1.0)
+            self._pan_y = min(max(0.0, self._pan_y + delta_pan_y * inv_zoom), 1.0)
+            self._drag_start_pos = event.pos()
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):  # type: ignore[override]
+        if event.button() == Qt.LeftButton and self._dragging:
+            self._dragging = False
+            self._drag_start_pos = None
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)

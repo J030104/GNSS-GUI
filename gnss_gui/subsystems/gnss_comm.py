@@ -16,7 +16,7 @@ from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QMessageBox, QLis
 from ..components import VideoViewer, MapViewer, ControlPanel, LogViewer, ShellTabs
 from ..components.video_layout_tabs import VideoLayoutTabWidget
 from ..utilities.connection_manager import ConnectionManager, SSHConfig
-from ..utilities.video_streamer import VideoStreamer, CameraManager
+from ..utilities.video_streamer import VideoStreamer, CameraManager, CameraSource
 
 
 class GNSSCommWidget(QWidget):
@@ -30,8 +30,8 @@ class GNSSCommWidget(QWidget):
             {
                 'name': 'Mode 1',
                 'boxes': [
-                    {'row': 0, 'col': 0, 'camera_name': 'Dual Camera'},
-                    {'row': 0, 'col': 2, 'camera_name': 'Dual Camera'},
+                    {'row': 0, 'col': 0, 'camera_name': 'Dual Camera 1'},
+                    {'row': 0, 'col': 2, 'camera_name': 'Dual Camera 2'},
                     {'row': 0, 'col': 1, 'rowspan': 3, 'camera_name': 'Insta360'},
                     {'row': 2, 'col': 0, 'camera_name': 'Left USB Camera'},
                     {'row': 2, 'col': 2, 'camera_name': 'Right USB Camera'},
@@ -40,8 +40,8 @@ class GNSSCommWidget(QWidget):
             {
                 'name': 'Mode 2',
                 'boxes': [
-                    {'row': 0, 'col': 0, 'camera_name': 'Dual Camera'},
-                    {'row': 0, 'col': 1, 'camera_name': 'Dual Camera'},
+                    {'row': 0, 'col': 0, 'camera_name': 'Dual Camera 1'},
+                    {'row': 0, 'col': 1, 'camera_name': 'Dual Camera 2'},
                     {'row': 1, 'col': 0, 'camera_name': 'Left USB Camera'},
                     {'row': 1, 'col': 1, 'camera_name': 'Right USB Camera'},
                 ],
@@ -129,6 +129,23 @@ class GNSSCommWidget(QWidget):
 
         # For backward compatibility, keep a reference to the first video viewer for parameter adjustment
         self.video_viewer = self.video_layout_tabs.get_video_viewers(0)[0]
+        # Track which viewers we've attached a local CameraSource to
+        self._attached_viewers = []  # type: list
+        # Track which camera the control panel is currently adjusting
+        self._parameter_camera = self.control_panel._current_camera
+        # Per-camera runtime state: key -> {streaming:bool, source:object}
+        # 'key' corresponds to control panel camera names (e.g. 'Local', 'Camera 1')
+        self._camera_states = {}
+
+        # Map a testing-local camera to a viewer name for now
+        # (per your request, the local camera should play in 'Dual Camera 1')
+        self._testing_local_target = 'Dual Camera 1'
+
+        # Keep layouts in sync when the tab changes
+        try:
+            self.video_layout_tabs.tab_widget.currentChanged.connect(self._on_layout_tab_changed)
+        except Exception:
+            pass
 
         # Start initial connection
         if self.connection.connect():
@@ -202,33 +219,72 @@ class GNSSCommWidget(QWidget):
 
     # Slot implementations
     def on_camera_changed(self, camera_name: str) -> None:
-        # Only update the first video viewer for parameter adjustment
+        # Camera selection in the control panel determines which camera's
+        # parameters (brightness/zoom) are being adjusted. Do NOT change
+        # which viewers have active streams here — Start/Stop controls that.
+        # The control panel already stores per-camera settings; just record
+        # which camera is being adjusted so subsequent brightness/zoom
+        # updates are targeted at that camera (if it is streaming).
+        self._parameter_camera = camera_name
+
+    def _ensure_camera_state(self, key: str) -> dict:
+        if key not in self._camera_states:
+            self._camera_states[key] = {
+                'streaming': False,
+                'source': None,
+            }
+        return self._camera_states[key]
+
+    def _on_layout_tab_changed(self, index: int) -> None:
+        """Called when the layout tab changes; attach/detach viewers so
+        ongoing streams appear in the new layout where applicable."""
         try:
-            viewer = self.video_layout_tabs.get_video_viewers(0)[0]
+            viewers = self.video_layout_tabs.get_video_viewers(index)
         except Exception:
-            viewer = self.video_viewer
-        try:
-            if camera_name.lower().startswith("local"):
-                cam = CameraManager.get_camera("local")
-                if cam is not None:
-                    viewer.attach_camera(cam)
-                    self._attached_camera = cam
-                    self.video_streamer = None
-                    return
-        except Exception:
-            pass
-        device_map = {
-            "Camera 1": "/dev/video0",
-            "Camera 2": "/dev/video1",
-            "Camera 3": "/dev/video2",
-            "Insta 360": "/dev/video3",
-        }
-        device = device_map.get(camera_name, "/dev/video0")
-        self.video_streamer = VideoStreamer(camera_device=device)
-        try:
-            viewer.attach_camera(None)
-        except Exception:
-            pass
+            viewers = self.video_layout_tabs.get_video_viewers(0)
+
+        for v in viewers:
+            vname = getattr(v, 'camera_name', '')
+            # find a streaming camera whose key maps to this viewer
+            matched_key = None
+            for key, state in self._camera_states.items():
+                if not state.get('streaming'):
+                    continue
+                # local testing target: if key is local, map to testing target
+                if key.lower().startswith('local') and vname == self._testing_local_target:
+                    matched_key = key
+                    break
+                # fuzzy match between viewer name and camera key
+                kn = key.lower().replace(' ', '')
+                vn = vname.lower().replace(' ', '')
+                if kn in vn or vn in kn:
+                    matched_key = key
+                    break
+
+            if matched_key is not None:
+                state = self._camera_states[matched_key]
+                source = state.get('source')
+                try:
+                    if isinstance(source, CameraSource):
+                        v.attach_camera(source)
+                    else:
+                        # no CameraSource available (e.g. VideoStreamer stub)
+                        v.attach_camera(None)
+                except Exception:
+                    pass
+                # Apply stored settings for that camera key
+                try:
+                    s = self.control_panel.get_camera_settings(matched_key)
+                    v.set_brightness(int(s.get('Image', {}).get('brightness', 0)))
+                    v.set_zoom(int(s.get('Image', {}).get('zoom', 1)))
+                except Exception:
+                    pass
+            else:
+                # detach if nothing streaming for this viewer
+                try:
+                    v.attach_camera(None)
+                except Exception:
+                    pass
 
     def on_bitrate_changed(self, value: int) -> None:
         self.log_viewer.append(f"Bitrate set to {value} kbps")
@@ -238,25 +294,64 @@ class GNSSCommWidget(QWidget):
             pass
 
     def on_brightness_changed(self, value: int) -> None:
-        # Adjust brightness in the video stream (stub)
-        pass
+        # Update per-camera stored settings (ControlPanel already does this)
+        sel = getattr(self, '_parameter_camera', None) or self.control_panel._current_camera
+        state = self._ensure_camera_state(sel)
+        # Only apply to viewers if this camera is currently streaming
+        if state.get('streaming'):
+            attached = state.get('attached_viewers') or []
+            for v in attached:
+                try:
+                    v.set_brightness(int(value))
+                except Exception:
+                    pass
 
     def on_zoom_changed(self, value: int) -> None:
-        # Adjust zoom in the video stream (stub)
-        pass
+        sel = getattr(self, '_parameter_camera', None) or self.control_panel._current_camera
+        state = self._ensure_camera_state(sel)
+        if state.get('streaming'):
+            attached = state.get('attached_viewers') or []
+            for v in attached:
+                try:
+                    v.set_zoom(int(value))
+                except Exception:
+                    pass
 
     def on_start_stream(self) -> None:
         cam_name = getattr(self.control_panel, '_current_camera', None)
-        try:
-            viewer = self.video_layout_tabs.get_video_viewers(0)[0]
-        except Exception:
-            viewer = self.video_viewer
+        viewers = self.video_layout_tabs.get_all_video_viewers()
         try:
             if isinstance(cam_name, str) and cam_name.lower().startswith('local'):
                 cam = CameraManager.get_camera('local')
                 if cam is not None:
                     try:
-                        viewer.attach_camera(cam)
+                        # Attach local camera only to the first 'dual' viewer
+                        # (testing-only behavior requested). If no 'dual'
+                        # label is found attach to the primary viewer.
+                        target = None
+                        for v in viewers:
+                            try:
+                                if 'dual' in getattr(v, 'camera_name', '').lower():
+                                    target = v
+                                    break
+                            except Exception:
+                                pass
+                        if target is None and viewers:
+                            target = viewers[0]
+                        if target is not None:
+                            try:
+                                target.attach_camera(cam)
+                                attached = [target]
+                                # record runtime state for this control-panel camera key
+                                state = self._ensure_camera_state(cam_name)
+                                state['streaming'] = True
+                                state['source'] = cam
+                                state['attached_viewers'] = attached
+                                self._attached_viewers = attached
+                            except Exception:
+                                self._attached_viewers = []
+                        else:
+                            self._attached_viewers = []
                         self._attached_camera = cam
                         cam.start()
                         return
@@ -266,29 +361,48 @@ class GNSSCommWidget(QWidget):
             pass
         if self.video_streamer is None:
             self.video_streamer = VideoStreamer(camera_device="/dev/video0")
+        # For remote streams we mark the camera as streaming but we don't
+        # currently have a CameraSource to attach to viewers.
+        state = self._ensure_camera_state(cam_name)
+        state['streaming'] = True
+        state['source'] = self.video_streamer
+        state['attached_viewers'] = []
         self.video_streamer.start_stream(self.control_panel.bitrate_slider.value())
 
     def on_stop_stream(self) -> None:
+        cam_name = getattr(self.control_panel, '_current_camera', None)
+        state = self._ensure_camera_state(cam_name)
         try:
-            viewer = self.video_layout_tabs.get_video_viewers(0)[0]
-        except Exception:
-            viewer = self.video_viewer
-        try:
-            if getattr(self, '_attached_camera', None) is not None:
+            if state.get('streaming'):
+                source = state.get('source')
+                attached = state.get('attached_viewers') or []
+                # Stop camera source if possible
                 try:
-                    self._attached_camera.stop()
+                    if isinstance(source, CameraSource):
+                        source.stop()
                 except Exception:
                     pass
+                # Detach viewers that were attached for this camera
+                for v in attached:
+                    try:
+                        v.attach_camera(None)
+                    except Exception:
+                        pass
+                state['streaming'] = False
+                state['attached_viewers'] = []
+                # Clear top-level attached pointers
+                if getattr(self, '_attached_camera', None) is source:
+                    self._attached_camera = None
+                    self._attached_viewers = []
+                # If this was a VideoStreamer remote stream, stop it
                 try:
-                    viewer.attach_camera(None)
+                    if isinstance(source, VideoStreamer):
+                        source.stop_stream()
                 except Exception:
                     pass
-                self._attached_camera = None
                 return
         except Exception:
             pass
-        if self.video_streamer is not None:
-            self.video_streamer.stop_stream()
 
     def update_bandwidth(self) -> None:
         """Update bandwidth label and maybe rover position."""
