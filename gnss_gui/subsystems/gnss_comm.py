@@ -16,7 +16,7 @@ from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QMessageBox, QLis
 from ..components import VideoViewer, MapViewer, ControlPanel, LogViewer, ShellTabs
 from ..components.video_layout_tabs import VideoLayoutTabWidget
 from ..utilities.connection_manager import ConnectionManager, SSHConfig
-from ..utilities.video_streamer import VideoStreamer, CameraManager, CameraSource
+from ..utilities.video_streamer import VideoStreamer, CameraManager, CameraSource, FfplayReceiver, FfplayOptions, NetworkStreamCamera, NetworkStreamOptions
 
 
 class GNSSCommWidget(QWidget):
@@ -61,6 +61,30 @@ class GNSSCommWidget(QWidget):
         self.shell_tabs = ShellTabs(log_viewer=self.log_viewer)
         self.connection = ConnectionManager(SSHConfig(host="jetson.local"))
         self.video_streamer = None
+        # ffplay-based external receiver for Insta360 or other remote streams
+        self._ffplay = FfplayReceiver()
+
+        # --- Remote stream configuration (edit these as needed) ---
+        # The remote host running ffmpeg sender (e.g., the Insta360 source machine)
+        # You can modify this at runtime if you add a UI input, but by request we
+        # store it here in gnss_comm.py for now.
+        self.remote_stream_host: str = "192.168.173.159"
+        # Common options:
+        self.remote_stream_port: int = 5000  # for RTSP examples
+        # Example URL template for RTSP. Adjust path according to your sender.
+        # Alternatives: srt://<host>:<port>?mode=listener or udp://@:port
+        self.remote_stream_path: str = "live.sdp"
+        # Choose protocol: "rtsp", "srt", or "udp" (used to form URL and defaults)
+        self.remote_stream_proto: str = "udp"
+        # Default ffplay options; tweak to match your network and latency needs
+        self.ffplay_options = FfplayOptions(
+            low_latency=True,
+            rtsp_transport="udp",  # for RTSP; change to "tcp" on hostile networks
+            video_size=None,         # e.g., "1280x720"
+            show_stats=False,
+            extra_args=["-loglevel", "warning"],
+            window_title="Insta360 Stream",
+        )
 
         # Create map toggle button
         self.map_toggle_button = QPushButton("📍")
@@ -99,7 +123,7 @@ class GNSSCommWidget(QWidget):
         self.shell_tabs.setMinimumHeight(60)
 
         # Create vertical splitter for resizable sections
-        splitter = QSplitter(Qt.Vertical)
+        splitter = QSplitter(Qt.Orientation.Vertical)
         splitter.addWidget(top_widget)
         splitter.addWidget(bottom_widget)
         splitter.setStretchFactor(0, 3)  # Top section gets more space
@@ -397,7 +421,7 @@ class GNSSCommWidget(QWidget):
                                 target.attach_camera(cam)
                                 attached = [target]
                                 # record runtime state for this control-panel camera key
-                                state = self._ensure_camera_state(cam_name)
+                                state = self._ensure_camera_state(str(cam_name))
                                 state['streaming'] = True
                                 state['source'] = cam
                                 state['attached_viewers'] = attached
@@ -413,11 +437,55 @@ class GNSSCommWidget(QWidget):
                         pass
         except Exception:
             pass
+
+        # If Insta360 or other remote camera selected, start ffplay receiver.
+        try:
+            if isinstance(cam_name, str) and ("insta" in cam_name.lower() or "camera" in cam_name.lower()):
+                # Build network stream camera and attach to the Insta360 video box
+                opts = NetworkStreamOptions(
+                    proto=self.remote_stream_proto,
+                    host=self.remote_stream_host,
+                    port=int(self.remote_stream_port),
+                    path=self.remote_stream_path,
+                    rtsp_transport=getattr(self.ffplay_options, 'rtsp_transport', 'udp'),
+                    buffer_size=1,
+                )
+                net_cam = NetworkStreamCamera(options=opts)
+                # Attach to the 'Insta360' viewer if present; otherwise attach to first viewer
+                target = None
+                for v in viewers:
+                    try:
+                        if 'insta' in getattr(v, 'camera_name', '').lower():
+                            target = v
+                            break
+                    except Exception:
+                        pass
+                if target is None and viewers:
+                    target = viewers[0]
+                if target is not None:
+                    try:
+                        target.attach_camera(net_cam)
+                        attached = [target]
+                        state = self._ensure_camera_state(str(cam_name))
+                        state['streaming'] = True
+                        state['source'] = net_cam
+                        state['attached_viewers'] = attached
+                        self._attached_viewers = attached
+                        self._attached_camera = net_cam
+                        net_cam.start()
+                        return
+                    except Exception as e:
+                        try:
+                            self.log_viewer.append(f"Failed to start network stream: {e}")
+                        except Exception:
+                            pass
+        except Exception:
+            pass
         if self.video_streamer is None:
             self.video_streamer = VideoStreamer(camera_device="/dev/video0")
         # For remote streams we mark the camera as streaming but we don't
         # currently have a CameraSource to attach to viewers.
-        state = self._ensure_camera_state(cam_name)
+        state = self._ensure_camera_state(str(cam_name))
         state['streaming'] = True
         state['source'] = self.video_streamer
         state['attached_viewers'] = []
@@ -425,7 +493,7 @@ class GNSSCommWidget(QWidget):
 
     def on_stop_stream(self) -> None:
         cam_name = getattr(self.control_panel, '_current_camera', None)
-        state = self._ensure_camera_state(cam_name)
+        state = self._ensure_camera_state(str(cam_name))
         try:
             if state.get('streaming'):
                 source = state.get('source')
@@ -433,6 +501,9 @@ class GNSSCommWidget(QWidget):
                 # Stop camera source if possible
                 try:
                     if isinstance(source, CameraSource):
+                        source.stop()
+                    # If source is ffplay receiver, stop it
+                    elif isinstance(source, FfplayReceiver):
                         source.stop()
                 except Exception:
                     pass
@@ -473,3 +544,22 @@ class GNSSCommWidget(QWidget):
         heading = random.uniform(0, 360)
         self.map_viewer.set_position(lat, lon)
         self.map_viewer.set_heading(heading)
+
+    # --- Helpers for remote stream URL construction ---
+    def _build_remote_url(self) -> str:
+        proto = (self.remote_stream_proto or "rtsp").lower()
+        host = self.remote_stream_host
+        port = int(self.remote_stream_port)
+        path = self.remote_stream_path.strip("/") if isinstance(self.remote_stream_path, str) else ""
+        if proto == "rtsp":
+            # Example: rtsp://host:8554/live.sdp
+            return f"rtsp://{host}:{port}/{path}" if path else f"rtsp://{host}:{port}/"
+        if proto == "srt":
+            # Caller can choose listener/caller mode in sender; here we default to caller
+            # Example: srt://host:port?latency=20
+            return f"srt://{host}:{port}?latency=20"
+        if proto == "udp":
+            # Example: udp://@port (listen) OR udp://host:port
+            return f"udp://{host}:{port}"
+        # Fallback: treat as raw URL
+        return proto
