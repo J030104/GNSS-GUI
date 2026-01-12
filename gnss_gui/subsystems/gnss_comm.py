@@ -13,11 +13,16 @@ from typing import Optional
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QMessageBox, QListWidget, QPushButton, QLabel, QSplitter
 
-from ..components import VideoViewer, MapViewer, ControlPanel, LogViewer, ShellTabs
+from ..components import VideoViewer, MapViewer, ControlPanel, LogViewer, ShellTabs, TelemetryPanel
 from ..components.video_layout_tabs import VideoLayoutTabWidget
 from ..utilities.connection_manager import ConnectionManager, SSHConfig
 from ..utilities.video_streamer import VideoStreamer, CameraManager, CameraSource, FfplayReceiver, FfplayOptions, NetworkStreamCamera, NetworkStreamOptions
+try:
+    from ..utilities.telemetry_client import TelemetryClient
+except Exception:
+    TelemetryClient = None
 
+TELEMETRY_UPDATE_MS = 500 # Update telemetry overlay every 500 ms
 
 class GNSSCommWidget(QWidget):
     """Widget containing all GUI elements for the GNSS & Communication subsystem."""
@@ -25,6 +30,48 @@ class GNSSCommWidget(QWidget):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
 
+        self._init_data()
+        self._init_ui()
+        self._init_connections()
+        self._init_timers()
+        self._connect_to_rover()
+
+    def _init_data(self) -> None:
+        """Initialize data structures and configurations."""
+        self.connection = ConnectionManager(SSHConfig(host="jetson.local"))
+        self.video_streamer = None
+        # ffplay-based external receiver for Insta360 or other remote streams
+        self._ffplay = FfplayReceiver()
+
+        # --- Remote stream configuration ---
+        self.remote_stream_host: str = "172.16.88.129"
+        self.remote_stream_port: int = 5000
+        self.remote_stream_path: str = "live.sdp"
+        self.remote_stream_proto: str = "udp"
+        
+        # Default ffplay options
+        self.ffplay_options = FfplayOptions(
+            low_latency=True,
+            rtsp_transport="udp",
+            video_size=None,
+            show_stats=False,
+            extra_args=["-loglevel", "warning"],
+            window_title="Insta360 Stream",
+        )
+
+        # State management
+        self._attached_viewers = []  # type: list
+        self._attached_camera = None
+        self._parameter_camera = None # Will be set in _init_ui after control panel init
+        self._camera_states = {}
+        
+        # Map a testing-local camera to a viewer name for now
+        # (per your request, the local camera should play in 'Dual Camera 1')
+        self._testing_local_target = 'Dual Camera 1'
+        self._telemetry_client = None
+
+    def _init_ui(self) -> None:
+        """Initialize the user interface components."""
         # Camera layout tab definitions (customize as needed)
         self.video_layout_tabs = VideoLayoutTabWidget([
             {
@@ -53,85 +100,34 @@ class GNSSCommWidget(QWidget):
                 ],
             },
         ])
+        
+        # Components
         self.map_placeholder = QWidget()
         self.map_viewer = MapViewer(parent=self)
         self.map_viewer.hide()  # Initially hidden
         self.control_panel = ControlPanel()
         self.log_viewer = LogViewer()
         self.shell_tabs = ShellTabs(log_viewer=self.log_viewer)
-        self.connection = ConnectionManager(SSHConfig(host="jetson.local"))
-        self.video_streamer = None
-        # ffplay-based external receiver for Insta360 or other remote streams
-        self._ffplay = FfplayReceiver()
+        self.telemetry_panel = TelemetryPanel()
 
-        # --- Remote stream configuration (edit these as needed) ---
-        # The remote host running ffmpeg sender (e.g., the Insta360 source machine)
-        # You can modify this at runtime if you add a UI input, but by request we
-        # store it here in gnss_comm.py for now.
-        self.remote_stream_host: str = "192.168.173.159"
-        # Common options:
-        self.remote_stream_port: int = 5000  # for RTSP examples
-        # Example URL template for RTSP. Adjust path according to your sender.
-        # Alternatives: srt://<host>:<port>?mode=listener or udp://@:port
-        self.remote_stream_path: str = "live.sdp"
-        # Choose protocol: "rtsp", "srt", or "udp" (used to form URL and defaults)
-        self.remote_stream_proto: str = "udp"
-        # Default ffplay options; tweak to match your network and latency needs
-        self.ffplay_options = FfplayOptions(
-            low_latency=True,
-            rtsp_transport="udp",  # for RTSP; change to "tcp" on hostile networks
-            video_size=None,         # e.g., "1280x720"
-            show_stats=False,
-            extra_args=["-loglevel", "warning"],
-            window_title="Insta360 Stream",
-        )
+        self._parameter_camera = self.control_panel._current_camera
 
-        # Create map toggle button
+        # Toggle Map Button
         self.map_toggle_button = QPushButton("📍")
         self.map_toggle_button.setFixedSize(30, 30)
         self.map_toggle_button.setToolTip("Toggle Map")
         self.map_toggle_button.clicked.connect(self._toggle_map)
 
-        # Layout configuration
-        # Create top widget with map button
-        top_widget = QWidget()
-        top_widget_layout = QVBoxLayout()
-        top_widget_layout.setContentsMargins(0, 0, 0, 0)
-        
-        # Button container at the top
-        button_container = QWidget()
-        button_layout = QHBoxLayout()
-        button_layout.setContentsMargins(0, 0, 0, 0)
-        button_layout.addWidget(self.map_toggle_button)
-        button_layout.addStretch()
-        button_container.setLayout(button_layout)
-        
-        top_widget_layout.addWidget(button_container)
-        top_widget_layout.addWidget(self.video_layout_tabs)
-        top_widget.setLayout(top_widget_layout)
+        # Layouts
+        top_widget = self._create_top_widget()
+        bottom_widget = self._create_bottom_widget()
 
-        # Create bottom widget for control panel and shell tabs
-        bottom_widget = QWidget()
-        bottom_layout = QHBoxLayout()
-        bottom_layout.setContentsMargins(1, 1, 1, 1)  # Reduce margins for tighter fit
-        bottom_layout.addWidget(self.control_panel, stretch=1)
-        bottom_layout.addWidget(self.shell_tabs, stretch=2)
-        bottom_widget.setLayout(bottom_layout)
-        
-        # Set minimum sizes for individual components
-        self.control_panel.setMinimumHeight(60)
-        self.shell_tabs.setMinimumHeight(60)
-
-        # Create vertical splitter for resizable sections
+        # Splitter
         splitter = QSplitter(Qt.Orientation.Vertical)
         splitter.addWidget(top_widget)
         splitter.addWidget(bottom_widget)
         splitter.setStretchFactor(0, 3)  # Top section gets more space
         splitter.setStretchFactor(1, 1)  # Bottom section gets less space
-        
-        # Set minimum sizes to control collapse behavior
-        top_widget.setMinimumHeight(300)  # Video section minimum
-        bottom_widget.setMinimumHeight(180)  # Lower minimum for control panel section
         
         # Configure splitter behavior
         splitter.setCollapsible(0, False)  # Prevent video section from collapsing completely
@@ -142,7 +138,57 @@ class GNSSCommWidget(QWidget):
         self.setLayout(main_layout)
 
         QTimer.singleShot(0, self._place_map_over_placeholder)
+        
+        # Keep layouts in sync when the tab changes
+        try:
+            self.video_layout_tabs.tab_widget.currentChanged.connect(self._on_layout_tab_changed)
+        except Exception:
+            pass
+        
+        # For backward compatibility, keep a reference to the first video viewer for parameter adjustment
+        self.video_viewer = self.video_layout_tabs.get_video_viewers(0)[0]
 
+    def _create_top_widget(self) -> QWidget:
+        """Create top widget with map button"""
+        widget = QWidget()
+        layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        # Button container at the top
+        button_container = QWidget()
+        button_layout = QHBoxLayout()
+        button_layout.setContentsMargins(0, 0, 0, 0)
+        button_layout.addWidget(self.map_toggle_button)
+        button_layout.addStretch()
+        button_layout.addWidget(self.telemetry_panel)
+        button_container.setLayout(button_layout)
+
+        layout.addWidget(button_container)
+        layout.addWidget(self.video_layout_tabs)
+        widget.setLayout(layout)
+        
+        # Set minimum sizes to control collapse behavior
+        widget.setMinimumHeight(300)  # Video section minimum
+        return widget
+
+    def _create_bottom_widget(self) -> QWidget:
+        """Create bottom widget for control panel and shell tabs"""
+        widget = QWidget()
+        layout = QHBoxLayout()
+        layout.setContentsMargins(1, 1, 1, 1)  # Reduce margins for tighter fit
+        layout.addWidget(self.control_panel, stretch=1)
+        layout.addWidget(self.shell_tabs, stretch=2)
+        widget.setLayout(layout)
+        
+        # Set minimum sizes to control collapse behavior
+        widget.setMinimumHeight(180)  # Lower minimum for control panel section
+        
+        # Set minimum sizes for individual components
+        self.control_panel.setMinimumHeight(60)
+        self.shell_tabs.setMinimumHeight(60)
+        return widget
+
+    def _init_connections(self) -> None:
         # Connect control panel signals to actions
         self.control_panel.cameraChanged.connect(self.on_camera_changed)
         self.control_panel.bitrateChanged.connect(self.on_bitrate_changed)
@@ -151,38 +197,34 @@ class GNSSCommWidget(QWidget):
         self.control_panel.startStreamRequested.connect(self.on_start_stream)
         self.control_panel.stopStreamRequested.connect(self.on_stop_stream)
 
-        # For backward compatibility, keep a reference to the first video viewer for parameter adjustment
-        self.video_viewer = self.video_layout_tabs.get_video_viewers(0)[0]
-        # Track which viewers we've attached a local CameraSource to
-        self._attached_viewers = []  # type: list
-        # Track which camera the control panel is currently adjusting
-        self._parameter_camera = self.control_panel._current_camera
-        # Per-camera runtime state: key -> {streaming:bool, source:object}
-        # 'key' corresponds to control panel camera names (e.g. 'Local', 'Camera 1')
-        self._camera_states = {}
+    def _init_timers(self) -> None:
+        # Timer to periodically update bandwidth
+        self.bandwidth_timer = QTimer(self)
+        self.bandwidth_timer.timeout.connect(self.update_bandwidth)
+        self.bandwidth_timer.start(1000)
 
-        # Map a testing-local camera to a viewer name for now
-        # (per your request, the local camera should play in 'Dual Camera 1')
-        self._testing_local_target = 'Dual Camera 1'
+        # Telemetry overlay updates (RSSI/latency/battery)
+        if TelemetryClient is not None:
+            try:
+                self._telemetry_client = TelemetryClient.instance()
+                self.log_viewer.append("Telemetry client connected (/rssi, /latency_ms, /battery)")
+            except Exception as exc:
+                self.log_viewer.append(f"Telemetry client unavailable: {exc}")
+                self._telemetry_client = None
 
-        # Keep layouts in sync when the tab changes
-        try:
-            self.video_layout_tabs.tab_widget.currentChanged.connect(self._on_layout_tab_changed)
-        except Exception:
-            pass
+        self._telemetry_timer = QTimer(self)
+        self._telemetry_timer.timeout.connect(self._update_telemetry_overlay)
+        self._telemetry_timer.start(TELEMETRY_UPDATE_MS)
 
+    def _connect_to_rover(self) -> None:
         # Start initial connection
+        # TODO: Implement retry logic and error handling
         if self.connection.connect():
             self.control_panel.set_connection_status(True)
             self.log_viewer.append("Connected to rover")
         else:
             self.control_panel.set_connection_status(False)
             self.log_viewer.append("Failed to connect to rover")
-
-        # Timer to periodically update bandwidth
-        self.bandwidth_timer = QTimer(self)
-        self.bandwidth_timer.timeout.connect(self.update_bandwidth)
-        self.bandwidth_timer.start(1000)
 
     def _toggle_map(self) -> None:
         """Toggle the map visibility."""
@@ -537,13 +579,41 @@ class GNSSCommWidget(QWidget):
         else:
             self.control_panel.set_bandwidth(0.0)
         # Simulate rover motion by updating map viewer position/heading
-        import random
 
+        # TODO: Integrate navigation subsystem to get real position/heading    
+        import random
         lat = random.random()
         lon = random.random()
         heading = random.uniform(0, 360)
         self.map_viewer.set_position(lat, lon)
         self.map_viewer.set_heading(heading)
+
+    def _update_telemetry_overlay(self) -> None:
+        """Update RSSI/latency/battery overlay in all video viewers."""
+        sample = None
+        if self._telemetry_client is not None:
+            try:
+                sample = self._telemetry_client.get_latest()
+            except Exception:
+                sample = None
+
+        if sample is None:
+            rssi = None
+            latency = None
+            battery = None
+        else:
+            rssi = sample.rssi_dbm
+            latency = sample.latency_ms
+            battery = sample.battery_pct
+
+        try:
+            self.telemetry_panel.set_telemetry(
+                rssi_dbm=rssi,
+                latency_ms=latency,
+                battery_pct=battery,
+            )
+        except Exception:
+            pass
 
     # --- Helpers for remote stream URL construction ---
     def _build_remote_url(self) -> str:

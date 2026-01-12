@@ -1,7 +1,7 @@
 """Reusable GUI components for the URC control interface.
 
 This package exposes classes such as `VideoViewer`, `MapViewer`,
-`ControlPanel`, `StatusBar` and `LogViewer`.  Each component is
+`ControlPanel`, `StatusBar`, `TelemetryPanel` and `LogViewer`.  Each component is
 implemented as a PyQt widget and can be integrated into different
 subsystems with minimal modification.
 """
@@ -12,6 +12,7 @@ from .control_panel import ControlPanel
 from .status_bar import StatusBar
 from .log_viewer import LogViewer
 from .shell_tabs import ShellTabs
+from .telemetry_panel import TelemetryPanel
 
 __all__ = [
     "VideoViewer",
@@ -20,4 +21,5 @@ __all__ = [
     "StatusBar",
     "LogViewer",
     "ShellTabs",
+    "TelemetryPanel",
 ]

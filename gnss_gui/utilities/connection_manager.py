@@ -33,6 +33,7 @@ class ConnectionManager:
     """
 
     def __init__(self, config: SSHConfig) -> None:
+        # TODO: Store config parameters and use them to establish real SSH connection.
         self.config = config
         self.connected: bool = False
 
