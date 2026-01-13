@@ -17,6 +17,7 @@ from ..components import VideoViewer, MapViewer, ControlPanel, LogViewer, ShellT
 from ..components.video_layout_tabs import VideoLayoutTabWidget
 from ..utilities.connection_manager import ConnectionManager, SSHConfig
 from ..utilities.video_streamer import VideoStreamer, CameraManager, CameraSource, FfplayReceiver, FfplayOptions, NetworkStreamCamera, NetworkStreamOptions
+from ..utilities.rover_stream_client import RoverStreamClient, StreamRequestParams
 try:
     from ..utilities.telemetry_client import TelemetryClient
 except Exception:
@@ -30,9 +31,9 @@ class GNSSCommWidget(QWidget):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
 
-        self._init_data()
+        self._init_data() # Video streamer, connection manager, state
         self._init_ui()
-        self._init_connections()
+        self._init_connections() # control panel signals
         self._init_timers()
         self._connect_to_rover()
 
@@ -44,7 +45,9 @@ class GNSSCommWidget(QWidget):
         self._ffplay = FfplayReceiver()
 
         # --- Remote stream configuration ---
-        self.remote_stream_host: str = "172.16.88.129"
+        # Default to listening on all interfaces for incoming UDP streams
+        self.remote_stream_host: str = "0.0.0.0"
+        # self.remote_stream_host: str = "172.16.88.129"
         self.remote_stream_port: int = 5000
         self.remote_stream_path: str = "live.sdp"
         self.remote_stream_proto: str = "udp"
@@ -483,11 +486,43 @@ class GNSSCommWidget(QWidget):
         # If Insta360 or other remote camera selected, start ffplay receiver.
         try:
             if isinstance(cam_name, str) and ("insta" in cam_name.lower() or "camera" in cam_name.lower()):
+                
+                # Request stream from Rover
+                target_host = self.remote_stream_host
+                target_port = self.remote_stream_port
+                
+                try:
+                    client = RoverStreamClient.instance()
+                    # Map Name to ID
+                    cam_map = {
+                        "Insta 360": "cam_front", 
+                        "Camera 1": "cam_front",
+                        "Camera 2": "cam_down",
+                        "Camera 3": "cam_front",
+                    }
+                    cid = cam_map.get(cam_name, "cam_front")
+                    
+                    self.log_viewer.append(f"Requesting stream for {cid}...")
+                    url = client.start_stream(StreamRequestParams(camera_id=cid, transport="udp"))
+                    self.log_viewer.append(f"Stream started at {url}")
+                    
+                    if url.startswith("udp://"):
+                        clean = url.replace("udp://", "")
+                        parts = clean.split(":")
+                        if len(parts) >= 2:
+                            target_host = parts[0]
+                            p_curr = parts[1]
+                            if '?' in p_curr:
+                                p_curr = p_curr.split('?')[0]
+                            target_port = int(p_curr)
+                except Exception as e:
+                    self.log_viewer.append(f"Rover stream request failed: {e}. Using defaults.")
+
                 # Build network stream camera and attach to the Insta360 video box
                 opts = NetworkStreamOptions(
-                    proto=self.remote_stream_proto,
-                    host=self.remote_stream_host,
-                    port=int(self.remote_stream_port),
+                    proto="udp",
+                    host=target_host,
+                    port=int(target_port),
                     path=self.remote_stream_path,
                     rtsp_transport=getattr(self.ffplay_options, 'rtsp_transport', 'udp'),
                     buffer_size=1,

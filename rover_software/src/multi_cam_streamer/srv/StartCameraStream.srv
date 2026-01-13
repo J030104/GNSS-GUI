@@ -1,0 +1,9 @@
+string camera_id
+string codec
+string resolution
+int32 bitrate_kbps
+string transport
+---
+bool success
+string message
+string stream_url

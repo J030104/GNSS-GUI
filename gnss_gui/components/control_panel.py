@@ -171,6 +171,8 @@ class ControlPanel(QWidget):
             self.camera_settings[cam] = self._default_settings()
 
         # Track current camera and load its settings
+        # This design has made future changes harder
+        # (Can only adjust one camera at a time)
         self._current_camera = self.camera_combo.currentText()
         self._load_camera_settings(self._current_camera)
 

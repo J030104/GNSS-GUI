@@ -1,0 +1,6 @@
+string camera_id
+---
+bool known
+bool streaming
+string stream_url
+string last_error

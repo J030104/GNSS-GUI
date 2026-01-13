@@ -243,6 +243,11 @@ class NetworkStreamCamera(CameraSource):
                             except Exception:
                                 pass
                             self._cap = self._cv2.VideoCapture(self._build_url())
+                            try:
+                                if hasattr(self._cv2, 'CAP_PROP_BUFFERSIZE'):
+                                    self._cap.set(self._cv2.CAP_PROP_BUFFERSIZE, max(1, int(self.options.buffer_size)))
+                            except Exception:
+                                pass
                             no_frame_strikes = 0
                         continue
                     no_frame_strikes = 0
@@ -358,7 +363,7 @@ class FfplayOptions:
     rtsp_transport: str = "udp"
     video_size: Optional[str] = None
     show_stats: bool = False
-    extra_args: List[str] = None  # type: ignore[assignment]
+    extra_args: Optional[List[str]] = None
     window_title: Optional[str] = None
 
 
@@ -436,6 +441,7 @@ class FfplayReceiver:
 
         try:
             # Use a new process group so we can terminate cleanly on Windows
+            # TODO: Solve the compatibility issues
             creationflags = 0
             try:
                 # 0x00000200 CREATE_NEW_PROCESS_GROUP (Windows only)
