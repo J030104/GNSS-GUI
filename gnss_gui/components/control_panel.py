@@ -25,6 +25,9 @@ from PyQt5.QtWidgets import (
 )
 
 
+
+from ..config import CAMERA_NAMES
+
 class ControlPanel(QWidget):
     """A panel of sliders and controls for camera and communication settings."""
 
@@ -48,7 +51,14 @@ class ControlPanel(QWidget):
         # Include a Local camera option for the device's default camera.
         # The string value here is presented to users; consumers map it to
         # underlying device names (e.g. 'local' -> local camera).
-        self.camera_combo.addItems(["Local", "Camera 1", "Camera 2", "Camera 3", "Insta 360"])
+        self.camera_combo.addItems([
+            CAMERA_NAMES["LOCAL"],
+            CAMERA_NAMES["DUAL_1"],
+            CAMERA_NAMES["DUAL_2"],
+            CAMERA_NAMES["USB_LEFT"],
+            CAMERA_NAMES["USB_RIGHT"],
+            CAMERA_NAMES["INSTA360"]
+        ])
         # handle saving/loading when selection changes
         self.camera_combo.currentTextChanged.connect(self._on_camera_changed)
         camera_layout.addWidget(camera_label)
@@ -270,6 +280,7 @@ class ControlPanel(QWidget):
         # load new settings
         self._load_camera_settings(new_camera)
         # emit external signal for consumers
+        print(f"[DEBUG] Control Panel Camera Changed to: {new_camera}")
         self.cameraChanged.emit(new_camera)
 
     def get_camera_settings(self, cam: Optional[str] = None) -> dict:

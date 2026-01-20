@@ -18,6 +18,9 @@ from ..components.video_layout_tabs import VideoLayoutTabWidget
 from ..utilities.connection_manager import ConnectionManager, SSHConfig
 from ..utilities.video_streamer import VideoStreamer, CameraManager, CameraSource, FfplayReceiver, FfplayOptions, NetworkStreamCamera, NetworkStreamOptions
 from ..utilities.rover_stream_client import RoverStreamClient, StreamRequestParams
+# Import Config
+from ..config import CAMERA_NAMES, CAMERA_PORTS, ROVER_IP
+
 try:
     from ..utilities.telemetry_client import TelemetryClient
 except Exception:
@@ -78,28 +81,39 @@ class GNSSCommWidget(QWidget):
         # Camera layout tab definitions (customize as needed)
         self.video_layout_tabs = VideoLayoutTabWidget([
             {
+                'name': '6-Cam Layout',
+                'boxes': [
+                    {'row': 0, 'col': 0, 'camera_name': CAMERA_NAMES["DUAL_1"]},
+                    {'row': 0, 'col': 1, 'camera_name': CAMERA_NAMES["LOCAL"]},
+                    {'row': 0, 'col': 2, 'camera_name': CAMERA_NAMES["DUAL_2"]},
+                    {'row': 1, 'col': 0, 'camera_name': CAMERA_NAMES["USB_LEFT"]},
+                    {'row': 1, 'col': 1, 'camera_name': CAMERA_NAMES["INSTA360"]},
+                    {'row': 1, 'col': 2, 'camera_name': CAMERA_NAMES["USB_RIGHT"]},
+                ],
+            },
+            {
                 'name': 'Mode 1',
                 'boxes': [
-                    {'row': 0, 'col': 0, 'camera_name': 'Dual Camera 1'},
-                    {'row': 0, 'col': 2, 'camera_name': 'Dual Camera 2'},
-                    {'row': 0, 'col': 1, 'rowspan': 3, 'camera_name': 'Insta360'},
-                    {'row': 2, 'col': 0, 'camera_name': 'Left USB Camera'},
-                    {'row': 2, 'col': 2, 'camera_name': 'Right USB Camera'},
+                    {'row': 0, 'col': 0, 'camera_name': CAMERA_NAMES["DUAL_1"]},
+                    {'row': 0, 'col': 2, 'camera_name': CAMERA_NAMES["DUAL_2"]},
+                    {'row': 0, 'col': 1, 'rowspan': 3, 'camera_name': CAMERA_NAMES["INSTA360"]},
+                    {'row': 2, 'col': 0, 'camera_name': CAMERA_NAMES["USB_LEFT"]},
+                    {'row': 2, 'col': 2, 'camera_name': CAMERA_NAMES["USB_RIGHT"]},
                 ],
             },
             {
                 'name': 'Mode 2',
                 'boxes': [
-                    {'row': 0, 'col': 0, 'camera_name': 'Dual Camera 1'},
-                    {'row': 0, 'col': 1, 'camera_name': 'Dual Camera 2'},
-                    {'row': 1, 'col': 0, 'camera_name': 'Left USB Camera'},
-                    {'row': 1, 'col': 1, 'camera_name': 'Right USB Camera'},
+                    {'row': 0, 'col': 0, 'camera_name': CAMERA_NAMES["DUAL_1"]},
+                    {'row': 0, 'col': 1, 'camera_name': CAMERA_NAMES["DUAL_2"]},
+                    {'row': 1, 'col': 0, 'camera_name': CAMERA_NAMES["USB_LEFT"]},
+                    {'row': 1, 'col': 1, 'camera_name': CAMERA_NAMES["USB_RIGHT"]},
                 ],
             },
             {
                 'name': 'Mode 3',
                 'boxes': [
-                    {'row': 0, 'col': 0, 'camera_name': 'Insta360'},
+                    {'row': 0, 'col': 0, 'camera_name': CAMERA_NAMES["INSTA360"]},
                 ],
             },
         ])
@@ -319,16 +333,21 @@ class GNSSCommWidget(QWidget):
             for key, state in self._camera_states.items():
                 if not state.get('streaming'):
                     continue
-                # local testing target: if key is local, map to testing target
-                if key.lower().startswith('local') and vname == self._testing_local_target:
+                
+                # Strict match (preferred)
+                if key == vname:
                     matched_key = key
                     break
-                # fuzzy match between viewer name and camera key
-                kn = key.lower().replace(' ', '')
-                vn = vname.lower().replace(' ', '')
-                if kn in vn or vn in kn:
+
+                # Robust normalized match
+                k_norm = key.lower().replace(' ', '')
+                v_norm = vname.lower().replace(' ', '')
+                if k_norm == v_norm:
                     matched_key = key
                     break
+                
+                # Special cases if needed, but avoid aggressive fuzzy matching
+                # that causes 'Local' to appear in 'Dual Camera 1' etc.
 
             if matched_key is not None:
                 state = self._camera_states[matched_key]
@@ -442,131 +461,84 @@ class GNSSCommWidget(QWidget):
 
     def on_start_stream(self) -> None:
         cam_name = getattr(self.control_panel, '_current_camera', None)
+        if not isinstance(cam_name, str):
+            return
+
         viewers = self.video_layout_tabs.get_all_video_viewers()
-        try:
-            if isinstance(cam_name, str) and cam_name.lower().startswith('local'):
-                cam = CameraManager.get_camera('local')
-                if cam is not None:
-                    try:
-                        # Attach local camera only to the first 'dual' viewer
-                        # (testing-only behavior requested). If no 'dual'
-                        # label is found attach to the primary viewer.
-                        target = None
-                        for v in viewers:
-                            try:
-                                if 'dual' in getattr(v, 'camera_name', '').lower():
-                                    target = v
-                                    break
-                            except Exception:
-                                pass
-                        if target is None and viewers:
-                            target = viewers[0]
-                        if target is not None:
-                            try:
-                                target.attach_camera(cam)
-                                attached = [target]
-                                # record runtime state for this control-panel camera key
-                                state = self._ensure_camera_state(str(cam_name))
-                                state['streaming'] = True
-                                state['source'] = cam
-                                state['attached_viewers'] = attached
-                                self._attached_viewers = attached
-                            except Exception:
-                                self._attached_viewers = []
-                        else:
-                            self._attached_viewers = []
-                        self._attached_camera = cam
-                        cam.start()
-                        return
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-
-        # If Insta360 or other remote camera selected, start ffplay receiver.
-        try:
-            if isinstance(cam_name, str) and ("insta" in cam_name.lower() or "camera" in cam_name.lower()):
-                
-                # Request stream from Rover
-                target_host = self.remote_stream_host
-                target_port = self.remote_stream_port
-                
+        
+        # --- 1. LOCAL CAMERA (Front Host Camera) ---
+        if cam_name == CAMERA_NAMES["LOCAL"]:
+            cam = CameraManager.get_camera('local')
+            if cam is not None:
                 try:
-                    client = RoverStreamClient.instance()
-                    # Map Name to ID
-                    cam_map = {
-                        "Insta 360": "cam_front", 
-                        "Camera 1": "cam_front",
-                        "Camera 2": "cam_down",
-                        "Camera 3": "cam_front",
-                    }
-                    cid = cam_map.get(cam_name, "cam_front")
-                    
-                    self.log_viewer.append(f"Requesting stream for {cid}...")
-                    url = client.start_stream(StreamRequestParams(camera_id=cid, transport="udp"))
-                    self.log_viewer.append(f"Stream started at {url}")
-                    
-                    if url.startswith("udp://"):
-                        clean = url.replace("udp://", "")
-                        parts = clean.split(":")
-                        if len(parts) >= 2:
-                            target_host = parts[0]
-                            p_curr = parts[1]
-                            if '?' in p_curr:
-                                p_curr = p_curr.split('?')[0]
-                            target_port = int(p_curr)
-                except Exception as e:
-                    self.log_viewer.append(f"Rover stream request failed: {e}. Using defaults.")
-
-                # Build network stream camera and attach to the Insta360 video box
-                opts = NetworkStreamOptions(
-                    proto="udp",
-                    host=target_host,
-                    port=int(target_port),
-                    path=self.remote_stream_path,
-                    rtsp_transport=getattr(self.ffplay_options, 'rtsp_transport', 'udp'),
-                    buffer_size=1,
-                )
-                net_cam = NetworkStreamCamera(options=opts)
-                # Attach to the 'Insta360' viewer if present; otherwise attach to first viewer
-                target = None
-                for v in viewers:
-                    try:
-                        if 'insta' in getattr(v, 'camera_name', '').lower():
+                    # STRICT MATCH: Only attach to 'Local' viewer
+                    target = None
+                    for v in viewers:
+                        vname = getattr(v, 'camera_name', '')
+                        if CAMERA_NAMES["LOCAL"] == vname:
                             target = v
                             break
-                    except Exception:
-                        pass
-                if target is None and viewers:
-                    target = viewers[0]
-                if target is not None:
-                    try:
-                        target.attach_camera(net_cam)
+                    
+                    if target is not None:
+                        target.attach_camera(cam)
                         attached = [target]
-                        state = self._ensure_camera_state(str(cam_name))
+                        state = self._ensure_camera_state(cam_name)
                         state['streaming'] = True
-                        state['source'] = net_cam
+                        state['source'] = cam
                         state['attached_viewers'] = attached
                         self._attached_viewers = attached
-                        self._attached_camera = net_cam
-                        net_cam.start()
-                        return
-                    except Exception as e:
-                        try:
-                            self.log_viewer.append(f"Failed to start network stream: {e}")
-                        except Exception:
-                            pass
-        except Exception:
-            pass
-        if self.video_streamer is None:
-            self.video_streamer = VideoStreamer(camera_device="/dev/video0")
-        # For remote streams we mark the camera as streaming but we don't
-        # currently have a CameraSource to attach to viewers.
-        state = self._ensure_camera_state(str(cam_name))
-        state['streaming'] = True
-        state['source'] = self.video_streamer
-        state['attached_viewers'] = []
-        self.video_streamer.start_stream(self.control_panel.bitrate_slider.value())
+                        self._attached_camera = cam
+                        cam.start()
+                    else:
+                        self.log_viewer.append("Error: 'Local' viewer not found in current layout.")
+                except Exception as e:
+                    self.log_viewer.append(f"Error starting local stream: {e}")
+            return
+
+        # --- 2. USB CAMERAS (LOCALHOST DEMO) ---
+        if cam_name in [CAMERA_NAMES["USB_LEFT"], CAMERA_NAMES["USB_RIGHT"]]:
+            try:
+                is_left = (cam_name == CAMERA_NAMES["USB_LEFT"])
+                target_port = CAMERA_PORTS["USB_LEFT"] if is_left else CAMERA_PORTS["USB_RIGHT"]
+                
+                # Setup Network Stream
+                opts = NetworkStreamOptions(
+                    proto="udp",
+                    host=ROVER_IP,  # Uses 127.0.0.1 from Config
+                    port=target_port,
+                    path="",
+                    buffer_size=1
+                )
+                net_cam = NetworkStreamCamera(options=opts)
+                
+                # Find specific viewer
+                target = None
+                for v in viewers:
+                    v_name = getattr(v, 'camera_name', '')
+                    if v_name == cam_name:
+                        target = v
+                        break
+                
+                if target is None:
+                     self.log_viewer.append(f"Warning: Viewer for {cam_name} not found in current layout.")
+
+                if target is not None:
+                    target.attach_camera(net_cam)
+                    attached = [target]
+                    state = self._ensure_camera_state(cam_name)
+                    state['streaming'] = True
+                    state['source'] = net_cam
+                    state['attached_viewers'] = attached
+                    self._attached_viewers = attached
+                    self._attached_camera = net_cam
+                    net_cam.start()
+            except Exception as e:
+                self.log_viewer.append(f"Error starting USB stream: {e}")
+            return
+
+        # --- 3. REMOTE ROVER CAMERAS (Placeholders) ---
+        # Dual 1, Dual 2, Insta360 - Just Log for now
+        self.log_viewer.append(f"Camera '{cam_name}' is a placeholder in this prototype.")
 
     def on_stop_stream(self) -> None:
         cam_name = getattr(self.control_panel, '_current_camera', None)

@@ -301,7 +301,37 @@ class CameraManager:
 # Register a default local camera (index 0) if OpenCV is available.
 try:
     if cv2 is not None:
-        cam = LocalCamera(index=0)
+        # Determine correct index for MacBook Pro Camera on MacOS
+        cam_idx = 0
+        import platform
+        if platform.system() == "Darwin":
+            try:
+                # Run ffmpeg to list devices
+                # Note: ffmpeg prints to stderr
+                result = subprocess.run(
+                    ["ffmpeg", "-f", "avfoundation", "-list_devices", "true", "-i", ""],
+                    stderr=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    text=True
+                )
+                output = result.stderr
+                # Parse output looking for "MacBook Pro Camera"
+                # Pattern: [AVFoundation indev @ ...] [index] Name
+                for line in output.split('\n'):
+                     if "MacBook Pro Camera" in line and "Desk View" not in line:
+                         # Extract index inside brackets e.g. [2]
+                         import re
+                         match = re.search(r'\[(\d+)\]', line)
+                         if match:
+                             cam_idx = int(match.group(1))
+                             print(f"Found MacBook Pro Camera at index {cam_idx}")
+                             break
+            except Exception as e:
+                print(f"Error auto-detecting camera: {e}")
+                # Fallback to 1 if detection fails (common secondary index)
+                cam_idx = 1
+
+        cam = LocalCamera(index=cam_idx)
         CameraManager.register("local", cam)
         # Do NOT start the camera at import time. The camera will be
         # opened when the user explicitly requests streaming (Start
@@ -336,7 +366,29 @@ class VideoStreamer:
             self._process.terminate()
             self._process.wait()
             self._process = None
+# Register remote cameras
+try:
+    if cv2 is not None:
+        # Left USB Camera (UDP Port 5000)
+        # Note: 0.0.0.0 binds to all interfaces to receive packets
+        left_cam = NetworkStreamCamera(NetworkStreamOptions(
+            proto="udp",
+            host="0.0.0.0",
+            port=5000,
+            buffer_size=1
+        ))
+        CameraManager.register("Left USB Camera", left_cam)
 
+        # Right USB Camera (UDP Port 5001)
+        right_cam = NetworkStreamCamera(NetworkStreamOptions(
+            proto="udp",
+            host="0.0.0.0",
+            port=5001,
+            buffer_size=1
+        ))
+        CameraManager.register("Right USB Camera", right_cam)
+except Exception:
+    pass
 
 @dataclass
 class FfplayOptions:
