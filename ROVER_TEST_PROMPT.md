@@ -1,23 +1,31 @@
 
-## Rover Side Simulation (Mock Video Server)
+## Rover Side Simulation (Camera Node)
 
-If you do not have access to the physical rover, you can simulated the video stream services using the provided mock script.
+You can run the camera node locally on your laptop to simulate the rover's video feeds using your own webcam(s).
 
 ### Requirements
-- **ROS2** installed (Humble/Jazzy).
-- **FFmpeg** installed.
-- **multi_cam_streamer** package sources (for service definitions).
+- **Python 3**
+- **FFmpeg** installed and in your PATH.
+- `opencv-python` and `netifaces` installed.
 
 ### Setup & Run
-1. Open `rover_mock/mock_rover_node.py`.
-2. Edit the **CONFIG** section at the top:
-   - Set `CLIENT_IP` to the IP address of the computer running the GUI (e.g., `192.168.1.5` or `127.0.0.1` if testing locally).
+1. Navigate to the script folder:
+   ```bash
+   cd rover_software/src/multi_cam_streamer/scripts
+   ```
+2. (Optional) Edit `camera_node.py` to hardcode specific device indices if the auto-detection is failing, or to change the destination IP if not running locally.
+   - Look for `DESTINATION_IP = "127.0.0.1"`
 3. Run the node:
    ```bash
-   python3 rover_mock/mock_rover_node.py
+   python3 camera_node.py
    ```
-4. The node will now respond to `start_stream` calls from the GUI by sending a test pattern video via UDP to your IP.
+4. The node will:
+   - Detect available video devices (using `ffmpeg -list_devices`).
+   - Assign them to configured slots (Left Camera -> Port 5000, Right Camera -> Port 5001).
+   - Start streaming via UDP to the GUI.
 
+### Testing Telemetry
+To test telemetry (GPS data, etc.), you will need to run the separate telemetry simulation scripts located in `rover_software/...` (to be implemented/documented).
 
 ## Rover Code Debugging & Build Fix Prompt
 

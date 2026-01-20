@@ -1,21 +1,21 @@
 ### Status Bar
-1. Time info (Current time + Stopwatch?)
-2. Signal quality
+- [ ] Add real-time clock and stopwatch functionality.
 
-### Visual (map included)
-1. Scroll to zoom in + right click and hold to shift 
-2. Link camera streams to the control panel
+### Visual (Map & Video)
+- [ ] Map Viewer: Implement scroll-to-zoom and right-click-drag to pan.
+- [ ] Map Viewer: Integrate real telemetry data for position marker.
 
-### Bottom
-1. Move time and connection status to the top
+### Communication & Telemetry
+- [ ] Implement actual RTSP/SRT streaming for Insta360 and Dual Cams (Currently placeholders).
+- [ ] Move time and connection status to the top bar.
 
-### Bottom Right (shells)
-1. Strange tab autocomplete
-2. 
+### Control Panel
+- [ ] Implement actual Bitrate/Brightness/Zoom commands sending to Rover.
 
-### Bottom Left (control)
-1. Refine the grouping and ordering
+### Shells & Logs
+- [ ] Fix shell tab autocomplete quirks.
+- [ ] Test shell tabbing with multiple active SSH sessions.
 
 ### Notes
-1. Shell tab tiling may still contain bug
-2. Toolbar on the top, right under the current tab has not yet available so it's commented out.
+- Shell tab tiling may still contain bugs.
+- Top toolbar is currently commented out/disabled.

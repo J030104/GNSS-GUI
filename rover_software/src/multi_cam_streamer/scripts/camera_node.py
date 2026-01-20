@@ -51,15 +51,15 @@ CONFIG = {
     #   - framerate: FPS
     "CAMERAS": {
         "Left_USB": {
-            "device": "0", # Arducam (Updated from [2] to [1])
-            # "device": "/dev/video1",
+            # "device": "0", # Arducam (Updated from [2] to [1])
+            "device": "/dev/video0",
             "port": 5000,
             "resolution": "640x480",
             "framerate": 30
         },
         "Right_USB": {
-            "device": "2", # USB Camera
-            # "device": "/dev/video3",
+            # "device": "2", # USB Camera
+            "device": "/dev/video2",
             "port": 5001,
             "resolution": "640x480",
             "framerate": 30
@@ -72,13 +72,13 @@ CONFIG = {
             "framerate": 30
         },
         "Dual_Cam_2": {
-            "device": "/dev/video5", # Placeholder
+            "device": "/dev/video6", # Placeholder
             "port": 5003,
             "resolution": "640x480",
             "framerate": 30
         },
         "Insta360": {
-            "device": "/dev/video6", # Placeholder
+            "device": "/dev/video8", # Placeholder
             "port": 8554,
             "resolution": "1920x1080",
             "framerate": 30
@@ -230,6 +230,8 @@ class CameraNode(Node if HAS_ROS else object):
 
 def main(args=None):
     if HAS_ROS:
+        # ROS2 Mode
+        print("Running in ROS2 Mode")
         rclpy.init(args=args)
         node = CameraNode()
         try:

@@ -1,6 +1,6 @@
 # Showcase Instructions
 
-This document outlines how to run the GNSS-GUI and the simulated Rover Server for the showcase.
+This document outlines how to run the GNSS-GUI and the Camera node for the showcase demonstration.
 
 ## 1. Prerequisites
 
@@ -15,51 +15,35 @@ Ensure you have the following installed on your demonstration machine (macOS):
     ```bash
     pip install -r gnss_gui/requirements.txt
     ```
-    (Ensure `opencv-python` is installed)
 
 ## 2. Project Structure
 
 *   `gnss_gui/`: The main GUI application.
 *   `rover_software/`: The code meant to run on the Rover (Jetson/RPi).
-    *   Contains `multi_cam_streamer` ROS2 package.
-    *   Contains `mock_rover_node.py` which simulates cameras without hardware.
+    *   `scripts/camera_node.py`: Simulates or runs the actual camera streams.
 
 ## 3. Running the Showcase
 
 You will need two terminal windows.
 
-### Terminal 1: Application Server (Rover Simulation)
+### Terminal 1: Camera Source (Rover Side)
 
-This emulates the rover sending video feeds.
+This mimics the rover sending video feeds from its USB cameras.
 
-**Connecting to a VM (Remote Rover):**
-If you are running this on a VM (like VMware Fusion/Ubuntu) and want to see the video on your Host Mac:
-1.  Find your Host Mac's IP address (e.g., run `ifconfig` on Mac, look for `en0` or `vmnet` IP, often `192.168.x.x` or `172.16.x.1`).
-2.  Edit `rover_software/src/multi_cam_streamer/scripts/mock_rover_node.py` **ON THE VM**.
-3.  Change `CLIENT_IP` to your Mac's IP address:
-    ```python
-    CONFIG = {
-        "CLIENT_IP": "192.168.1.5",  # <--- YOUR MAC HOST IP HERE
-        # ...
-    }
-    ```
-4.  Run the script on the VM.
-
-**Running Locally (Mac Only):**
-1.  Navigate to the project root.
-2.  Run the mock node (works without ROS installed):
+1.  Navigate to the script directory:
     ```bash
-    python3 rover_software/src/multi_cam_streamer/scripts/mock_rover_node.py
+    cd rover_software/src/multi_cam_streamer/scripts
     ```
-    *   **Note:** This will automatically start streaming a test pattern to `udp://127.0.0.1:5000` (Front Cam) and `:5001` (Down Cam).
-    *   *Troubleshooting:* If you see "ImportError: No module named rclpy", the script will fail if strict ROS dependencies are checked. However, checking the code, it imports `rclpy`. 
-    *   **IF YOU DO NOT HAVE ROS:** You may need to comment out `import rclpy` and `Node` inheritance in `mock_rover_node.py` and run it as a standalone script for the demo, OR ensure you have a basic ROS environment (e.g. `robostack` on Mac).
-    *   *Alternative:* If you cannot run the python script due to missing ROS, you can manually run ffmpeg:
-        ```bash
-        ffmpeg -f lavfi -i testsrc=size=1280x720:rate=30 -preset ultrafast -tune zerolatency -f mpegts udp://127.0.0.1:5000?pkt_size=1316
-        ```
+2.  Run the camera node:
+    ```bash
+    python3 camera_node.py
+    ```
+    *   **Behavior**: This script detects connected USB cameras.
+        *   **Left USB**: Index 1 (Arducam) -> Streamed to Port 5000.
+        *   **Right USB**: Index 0 (USB Cam) -> Streamed to Port 5001.
+        *   If a camera is missing, it may fallback to a synthetic test pattern if configured.
 
-### Terminal 2: The GNSS GUI
+### Terminal 2: The GNSS GUI (Base Station)
 
 1.  Navigate to the project root.
 2.  Run the GUI:
@@ -69,21 +53,26 @@ If you are running this on a VM (like VMware Fusion/Ubuntu) and want to see the 
 
 ## 4. Demonstrating Features
 
+The GUI starts in the **"6-Cam Layout"**.
+
 1.  **Local Camera**:
-    *   In the "Comms" tab (right side Control Panel), select **Camera: Local**.
+    *   Select **Camera: Local** in the Control Panel.
     *   Click **Start Stream**.
-    *   Verify your webcam appears in the `Dual Camera 1` or primary viewer window.
+    *   **Result**: Your MacBook Pro's built-in webcam stream appears in the top-middle "Local" box.
 
-2.  **Remote Camera (Rover)**:
-    *   Ensure the Mock Rover Node (Terminal 1) is running.
-    *   Select **Camera: Camera 1** or **Insta 360**.
+2.  **USB Cameras**:
+    *   Select **Camera: Left USB Camera**.
     *   Click **Start Stream**.
-    *   Verify the synthesized test pattern (colored bars/noise) appears in the Viewer.
+    *   **Result**: The feed from the Arducam appears in the bottom-left box.
+    *   Select **Camera: Right USB Camera**.
+    *   Click **Start Stream**.
+    *   **Result**: The feed from the Generic USB cam appears in the bottom-right box.
 
-## 5. Deploying to Rover
+3.  **Placeholders**:
+    *   Selecting "Dual Camera 1", "Dual Camera 2", or "Insta360" will log a placeholder message, as these streams are not yet physically connected in this demo setup.
 
-To deploy the `rover_software` to the real rover:
-1.  Copy the `rover_software` folder to the rover's `src` workspace.
-2.  Build with `colcon build`.
-3.  Source setup: `. install/setup.bash`.
-4.  Run the real nodes or the mock node as needed.
+## 5. Troubleshooting configuration
+
+If camera indices change (e.g., unplugging/replugging):
+*   **GUI**: `gnss_gui/config.py` defines the names and ports.
+*   **Rover**: Edit `rover_software/src/multi_cam_streamer/scripts/camera_node.py` to adjust `device` indices (e.g., "0", "1", "2") to match your `ffmpeg -list_devices true -f avfoundation -i ""` output.
