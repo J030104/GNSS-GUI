@@ -103,15 +103,19 @@ class ControlPanel(QWidget):
         # Video controls
         bitrate_group = QGroupBox("Video bitrate (kbps)")
         bitrate_form = QFormLayout()
-        self.bitrate_slider = QSlider(Qt.Horizontal)
-        self.bitrate_slider.setRange(500, 5000)
-        self.bitrate_slider.setValue(2000)
-        bitrate_form.addRow(self.bitrate_slider)
+        self.bitrate_input = QSpinBox()
+        self.bitrate_input.setRange(500, 50000)
+        self.bitrate_input.setSingleStep(100)
+        self.bitrate_input.setValue(800)
+        bitrate_form.addRow(self.bitrate_input)
         bitrate_group.setLayout(bitrate_form)
-        self.bitrate_slider.valueChanged.connect(self._on_bitrate_changed)
+        self.bitrate_input.editingFinished.connect(self._on_bitrate_editing_finished)
+        self.bitrate_input.setKeyboardTracking(False)  # Only emit valueChanged when Enter is pressed or focus lost
         scroll_content_layout.addWidget(bitrate_group)
 
         # Image controls
+        image_controls_layout = QHBoxLayout()
+
         brightness_group = QGroupBox("Brightness")
         brightness_form = QFormLayout()
         self.brightness_slider = QSlider(Qt.Horizontal)
@@ -120,7 +124,7 @@ class ControlPanel(QWidget):
         brightness_form.addRow(self.brightness_slider)
         brightness_group.setLayout(brightness_form)
         self.brightness_slider.valueChanged.connect(self._on_brightness_changed)
-        scroll_content_layout.addWidget(brightness_group)
+        image_controls_layout.addWidget(brightness_group)
 
         zoom_group = QGroupBox("Zoom")
         zoom_form = QFormLayout()
@@ -130,7 +134,9 @@ class ControlPanel(QWidget):
         zoom_form.addRow(self.zoom_slider)
         zoom_group.setLayout(zoom_form)
         self.zoom_slider.valueChanged.connect(self._on_zoom_changed)
-        scroll_content_layout.addWidget(zoom_group)
+        image_controls_layout.addWidget(zoom_group)
+
+        scroll_content_layout.addLayout(image_controls_layout)
 
         scroll_content_layout.addStretch(1)
         scroll_content.setLayout(scroll_content_layout)
@@ -185,6 +191,11 @@ class ControlPanel(QWidget):
         # (Can only adjust one camera at a time)
         self._current_camera = self.camera_combo.currentText()
         self._load_camera_settings(self._current_camera)
+
+    def _on_bitrate_editing_finished(self) -> None:
+        """Handle bitrate input finish (e.g. Enter pressed)."""
+        value = self.bitrate_input.value()
+        self._on_bitrate_changed(value)
 
     def _on_bitrate_changed(self, value: int) -> None:
         """Internal slot to normalise bitrate value, store it and emit signal."""
@@ -246,7 +257,7 @@ class ControlPanel(QWidget):
         if not cam or cam not in self.camera_settings:
             return
         s = self.camera_settings[cam]
-        s["Video"]["bitrate"] = int(self.bitrate_slider.value())
+        s["Video"]["bitrate"] = int(self.bitrate_input.value())
         s["Image"]["brightness"] = int(self.brightness_slider.value())
         s["Image"]["zoom"] = int(self.zoom_slider.value())
 
@@ -256,15 +267,15 @@ class ControlPanel(QWidget):
             return
         s = self.camera_settings[cam]
         # block signals while setting values to avoid emitting events
-        self.bitrate_slider.blockSignals(True)
+        self.bitrate_input.blockSignals(True)
         self.brightness_slider.blockSignals(True)
         self.zoom_slider.blockSignals(True)
         try:
-            self.bitrate_slider.setValue(int(s["Video"].get("bitrate", 2000)))
+            self.bitrate_input.setValue(int(s["Video"].get("bitrate", 2000)))
             self.brightness_slider.setValue(int(s["Image"].get("brightness", 0)))
             self.zoom_slider.setValue(int(s["Image"].get("zoom", 1)))
         finally:
-            self.bitrate_slider.blockSignals(False)
+            self.bitrate_input.blockSignals(False)
             self.brightness_slider.blockSignals(False)
             self.zoom_slider.blockSignals(False)
 

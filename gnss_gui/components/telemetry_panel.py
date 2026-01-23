@@ -23,8 +23,8 @@ class TelemetryPanel(QFrame):
             }
         """)
         layout = QHBoxLayout()
-        layout.setContentsMargins(6, 4, 6, 4)
-        layout.setSpacing(10)
+        layout.setContentsMargins(4, 2, 4, 2)
+        layout.setSpacing(5)
         self._rssi_label = QLabel("RSSI: -- dBm")
         self._sep_one = QLabel("|")
         self._latency_label = QLabel("Latency: -- ms")

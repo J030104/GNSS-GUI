@@ -213,48 +213,74 @@ class NetworkStreamCamera(CameraSource):
         if self._thread and self._thread.is_alive():
             return
         self._stop_event.clear()
-        url = self._build_url()
-        # OpenCV with FFMPEG backend should be default on pip wheels
-        self._cap = self._cv2.VideoCapture(url)
-        try:
-            # Reduce internal buffering to lower latency
-            if hasattr(self._cv2, 'CAP_PROP_BUFFERSIZE'):
-                self._cap.set(self._cv2.CAP_PROP_BUFFERSIZE, max(1, int(self.options.buffer_size)))
-        except Exception:
-            pass
+        
+        # NOTE: We do NOT open VideoCapture here because it blocks checking for the stream.
+        # Instead we let the thread open it.
 
         def _run() -> None:
+            # Generate URL in the thread (or before)
+            url = self._build_url()
+            # Initial open attempt
+            try:
+                if self._cap is None:
+                    # Pass a timeout to ffmpeg via environment or url if supported?
+                    # For now just open it. This might block THIS thread, but not the GUI.
+                    self._cap = self._cv2.VideoCapture(url)
+                    if not self._cap.isOpened():
+                         self._cap = None
+                    else:
+                        # Reduce internal buffering to lower latency
+                        if hasattr(self._cv2, 'CAP_PROP_BUFFERSIZE'):
+                            self._cap.set(self._cv2.CAP_PROP_BUFFERSIZE, max(1, int(self.options.buffer_size)))
+            except Exception:
+                pass
+
             no_frame_strikes = 0
             while not self._stop_event.is_set():
                 try:
-                    if self._cap is None:
-                        time.sleep(0.02)
-                        continue
+                    if self._cap is None or not self._cap.isOpened():
+                        # Try to open if not open
+                        try:
+                            if self._cap:
+                                self._cap.release()
+                        except Exception:
+                            pass
+                        
+                        # Use a small sleep to avoid hammering
+                        time.sleep(0.5)
+                        try: 
+                             self._cap = self._cv2.VideoCapture(url)
+                             if hasattr(self._cv2, 'CAP_PROP_BUFFERSIZE'):
+                                self._cap.set(self._cv2.CAP_PROP_BUFFERSIZE, max(1, int(self.options.buffer_size)))
+                        except Exception:
+                             pass
+                        
+                        if self._cap is None or not self._cap.isOpened():
+                             continue
+
                     ok, frame = self._cap.read()  # BGR
                     if not ok or frame is None:
                         no_frame_strikes += 1
                         # Avoid busy loop when stream stalls
                         time.sleep(0.02)
                         # After a few misses, try to reopen
-                        if no_frame_strikes >= 100:
+                        if no_frame_strikes >= 50: # 50 * 20ms = 1s
+                            no_frame_strikes = 0
                             try:
                                 if self._cap is not None:
                                     self._cap.release()
                             except Exception:
                                 pass
-                            self._cap = self._cv2.VideoCapture(self._build_url())
-                            try:
-                                if hasattr(self._cv2, 'CAP_PROP_BUFFERSIZE'):
-                                    self._cap.set(self._cv2.CAP_PROP_BUFFERSIZE, max(1, int(self.options.buffer_size)))
-                            except Exception:
-                                pass
-                            no_frame_strikes = 0
+                            self._cap = None # trigger reopen loop
                         continue
+                    
                     no_frame_strikes = 0
+                    
+                    # Store latest frame (convert BGR -> RGB)
                     with self._lock:
                         self._frame = self._cv2.cvtColor(frame, self._cv2.COLOR_BGR2RGB)
                 except Exception:
-                    time.sleep(0.05)
+                     time.sleep(0.1)
 
         self._thread = threading.Thread(target=_run, daemon=True)
         self._thread.start()

@@ -8,7 +8,7 @@ from typing import Optional
 import sys
 import shutil
 
-from PyQt5.QtCore import Qt, QProcess, QEvent
+from PyQt5.QtCore import Qt, QProcess, QEvent, QProcessEnvironment
 from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import (
     QWidget,
@@ -36,7 +36,16 @@ class _ShellWidget(QWidget):
     def __init__(self, shell_cmd: str, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._proc = QProcess(self)
-        self._proc.setProcessChannelMode(QProcess.MergedChannels)
+        
+        # Set environment to dumb to avoid ANSI codes and rich formatting
+        # which QPlainTextEdit cannot handle well/at all.
+        env = QProcessEnvironment.systemEnvironment()
+        env.insert("TERM", "dumb")
+        # Set a wide column width to prevent simplistic wrapping by tools
+        env.insert("COLUMNS", "200") 
+        self._proc.setProcessEnvironment(env)
+        
+        # self._proc.setProcessChannelMode(QProcess.MergedChannels) # Removed to handle channels explicitly
 
         self._out = QPlainTextEdit()
         self._out.setReadOnly(True)
@@ -67,28 +76,78 @@ class _ShellWidget(QWidget):
             program = shutil.which('cmd') or 'cmd'
             # cmd runs interactive by default
         else:
-            # Prefer bash if available; start as interactive so aliases are loaded
-            bash = shutil.which('bash')
-            sh = shutil.which('sh')
-            if bash:
-                program = bash
-                args = ['-i']
-            elif sh:
-                program = sh
-                args = ['-i']
-            else:
-                program = '/bin/sh'
+            # Determine shell: prefer zsh on macOS, otherwise respect SHELL or fallback
+            candidates = []
+            if sys.platform == 'darwin':
+                candidates.append('zsh')
+                # Also try full path for zsh on mac
+                candidates.append('/bin/zsh')
+            
+            if 'SHELL' in os.environ:
+                candidates.append(os.environ['SHELL'])
+            
+            candidates.extend(['bash', 'sh', 'zsh'])
+            
+            program = '/bin/sh'
+            args = []
+            
+            # Find first available shell
+            seen = set()
+            for shell in candidates:
+                if shell in seen:
+                    continue
+                seen.add(shell)
+                path = shutil.which(shell)
+                if path:
+                    program = path
+                    if 'zsh' in shell:
+                        # Disable ZLE (Zsh Line Editor) to avoid TTY read errors on pipes
+                        args = ['-i', '+o', 'zle']
+                    else:
+                        args = ['-i']
+                    break
 
         try:
+            print(f"Starting shell program: {program} with args: {args}")
             self._proc.start(program, args)
+            if not self._proc.waitForStarted(2000):
+                self._out.appendPlainText("Failed to start shell process (timeout).")
+                return
+
+            # Send commands to simplify the prompt after starting
+            # Use a clean prompt that includes current directory
+            if sys.platform == 'darwin' or 'zsh' in program:
+                # ZSH: user@host dir % 
+                # Combine commands to reduce prompt clutter
+                self._proc.write(b"export PROMPT='%n@%m %~ %# '; echo Shell started\n")
+            else:
+                # Bash/Sh: user@host dir $
+                self._proc.write(b"export PS1='\\u@\\h \\w $ '; echo Shell started\n")
+            
         except Exception as e:
-            self._out.appendPlainText(f'Failed to start shell: {e}')
+            msg = f'Failed to start shell: {e}'
+            print(msg)
+            self._out.appendPlainText(msg)
 
     def _read_output(self) -> None:
         try:
-            data = self._proc.readAllStandardOutput().data().decode(errors='replace')
-            if data:
-                self._out.appendPlainText(data)
+            # Read stdout
+            out_data = self._proc.readAllStandardOutput().data().decode(errors='replace')
+            if out_data:
+                self._out.moveCursor(self._out.textCursor().End)
+                self._out.insertPlainText(out_data)
+                # Scroll to bottom
+                sb = self._out.verticalScrollBar()
+                sb.setValue(sb.maximum())
+            
+            # Read stderr
+            err_data = self._proc.readAllStandardError().data().decode(errors='replace')
+            if err_data:
+                self._out.moveCursor(self._out.textCursor().End)
+                self._out.insertPlainText(err_data)
+                # Scroll to bottom
+                sb = self._out.verticalScrollBar()
+                sb.setValue(sb.maximum())
         except Exception:
             pass
 
@@ -103,11 +162,16 @@ class _ShellWidget(QWidget):
         except Exception:
             pass
         self._hist_index = -1
+        
+        # Manually echo command to output since non-TTY shells usually don't
+        self._out.moveCursor(self._out.textCursor().End)
+        self._out.insertPlainText(txt + '\n')
+        
         # Write the command to the process stdin
         try:
             self._proc.write((txt + '\n').encode())
         except Exception:
-            self._out.appendPlainText('Failed to send input to shell')
+             self._out.appendPlainText('Failed to send input to shell')
         self._in.clear()
 
     def close(self) -> None:
@@ -289,6 +353,7 @@ class ShellTabs(QWidget):
     def add_shell(self) -> None:
         """Add a new shell tab."""
         self._shell_count += 1
+        print(f"Adding shell {self._shell_count}")
         shell = _ShellWidget('', parent=self)
         title = f'Shell {self._shell_count}'
         idx = self._tabs.addTab(shell, title)
@@ -301,7 +366,8 @@ class ShellTabs(QWidget):
         # Ensure log remains unclosable if present
         self._update_tab_closable_flags()
         try:
-            shell._proc.finished.connect(lambda ec, st, w=shell: self._on_shell_finished(w))
+            # Connect finished signal. We pass exit code and status for debugging.
+            shell._proc.finished.connect(lambda ec, st, w=shell: self._on_shell_finished(w, ec, st))
         except Exception:
             pass
         # no split button; nothing to update
@@ -696,8 +762,9 @@ class ShellTabs(QWidget):
         self._tabs.removeTab(index)
         # no split button; nothing to update
 
-    def _on_shell_finished(self, shell_widget: QWidget) -> None:
+    def _on_shell_finished(self, shell_widget: QWidget, exit_code: int = 0, exit_status: QProcess.ExitStatus = QProcess.NormalExit) -> None:
         """Remove the tab for a shell widget when its process finishes."""
+        print(f"Shell finished with code: {exit_code}, status: {exit_status}")
         try:
             # If the shell was closed by the user and the tab close handler
             # is already handling removal, skip to avoid double-removal.
@@ -711,6 +778,12 @@ class ShellTabs(QWidget):
                     return
             except Exception:
                 pass
+                
+            # If process crashed or exited with error, keep tab open to show logs
+            if exit_code != 0 and exit_status != QProcess.CrashExit: # Crash exit is weird on some platforms
+                 shell_widget._out.appendPlainText(f"\nShell exited with code {exit_code}. Tab kept open for inspection.")
+                 return
+
             idx = self._tabs.indexOf(shell_widget)
             if idx != -1:
                 try:

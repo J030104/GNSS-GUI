@@ -128,7 +128,7 @@ class RoverStreamClient:
 
     # ------------------------------------------------------------------ API
 
-    def start_stream(self, params: StreamRequestParams) -> str:
+    def start_stream(self, params: StreamRequestParams, timeout: float = 1.0) -> str:
         """
         Start the stream for the given camera.
 
@@ -150,7 +150,7 @@ class RoverStreamClient:
         req.bitrate_kbps = int(params.bitrate_kbps)
         req.transport = params.transport
 
-        resp = self._call_service(self._cli_start, req)
+        resp = self._call_service(self._cli_start, req, timeout=timeout)
         if not getattr(resp, "success", False):
             raise RuntimeError(f"Failed to start stream: {getattr(resp, 'message', 'unknown error')}")
         return getattr(resp, "stream_url", "")

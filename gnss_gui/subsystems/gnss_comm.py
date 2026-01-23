@@ -131,6 +131,7 @@ class GNSSCommWidget(QWidget):
 
         # Toggle Map Button
         self.map_toggle_button = QPushButton("📍")
+        # self.map_toggle_button = QPushButton("Map")
         self.map_toggle_button.setFixedSize(30, 30)
         self.map_toggle_button.setToolTip("Toggle Map")
         self.map_toggle_button.clicked.connect(self._toggle_map)
@@ -198,7 +199,7 @@ class GNSSCommWidget(QWidget):
         widget.setLayout(layout)
         
         # Set minimum sizes to control collapse behavior
-        widget.setMinimumHeight(180)  # Lower minimum for control panel section
+        widget.setMinimumHeight(250)  # Lower minimum for control panel section
         
         # Set minimum sizes for individual components
         self.control_panel.setMinimumHeight(60)
