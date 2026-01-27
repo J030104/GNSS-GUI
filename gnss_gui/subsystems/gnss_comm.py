@@ -209,7 +209,8 @@ class GNSSCommWidget(QWidget):
     def _init_connections(self) -> None:
         # Connect control panel signals to actions
         self.control_panel.cameraChanged.connect(self.on_camera_changed)
-        self.control_panel.bitrateChanged.connect(self.on_bitrate_changed)
+        self.control_panel.framerateChanged.connect(self.on_framerate_changed)
+        self.control_panel.resolutionChanged.connect(self.on_resolution_changed)
         self.control_panel.brightnessChanged.connect(self.on_brightness_changed)
         self.control_panel.zoomChanged.connect(self.on_zoom_changed)
         self.control_panel.startStreamRequested.connect(self.on_start_stream)
@@ -429,12 +430,13 @@ class GNSSCommWidget(QWidget):
         except Exception:
             pass
 
-    def on_bitrate_changed(self, value: int) -> None:
-        self.log_viewer.append(f"Bitrate set to {value} kbps")
-        # If a stream is active, adjust bitrate (not implemented)
-        # In a real implementation you might send a command to ffmpeg
-        if self.video_streamer is not None:
-            pass
+    def on_framerate_changed(self, value: int) -> None:
+        cam = getattr(self, "_parameter_camera", "Unknown")
+        self.log_viewer.append(f"Camera '{cam}' switching framerate to {value}")
+
+    def on_resolution_changed(self, value: str) -> None:
+        cam = getattr(self, "_parameter_camera", "Unknown")
+        self.log_viewer.append(f"Camera '{cam}' switching resolution to {value}")
 
     def on_brightness_changed(self, value: int) -> None:
         # Update per-camera stored settings (ControlPanel already does this)

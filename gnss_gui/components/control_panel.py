@@ -22,6 +22,7 @@ from PyQt5.QtWidgets import (
     QFormLayout,
     QSpinBox,
     QScrollArea,
+    QLineEdit,
 )
 
 
@@ -33,7 +34,8 @@ class ControlPanel(QWidget):
 
     # Define custom signals for parameter updates
     cameraChanged = pyqtSignal(str)
-    bitrateChanged = pyqtSignal(int)
+    framerateChanged = pyqtSignal(int)
+    resolutionChanged = pyqtSignal(str)
     brightnessChanged = pyqtSignal(int)
     zoomChanged = pyqtSignal(int)
     startStreamRequested = pyqtSignal()
@@ -101,17 +103,29 @@ class ControlPanel(QWidget):
         scroll_content_layout.addLayout(status_layout)
 
         # Video controls
-        bitrate_group = QGroupBox("Video bitrate (kbps)")
-        bitrate_form = QFormLayout()
-        self.bitrate_input = QSpinBox()
-        self.bitrate_input.setRange(500, 50000)
-        self.bitrate_input.setSingleStep(100)
-        self.bitrate_input.setValue(800)
-        bitrate_form.addRow(self.bitrate_input)
-        bitrate_group.setLayout(bitrate_form)
-        self.bitrate_input.editingFinished.connect(self._on_bitrate_editing_finished)
-        self.bitrate_input.setKeyboardTracking(False)  # Only emit valueChanged when Enter is pressed or focus lost
-        scroll_content_layout.addWidget(bitrate_group)
+        video_settings_layout = QHBoxLayout()
+
+        framerate_group = QGroupBox("Framerate")
+        framerate_form = QFormLayout()
+        self.framerate_input = QSpinBox()
+        self.framerate_input.setRange(1, 120)
+        self.framerate_input.setValue(30)
+        framerate_form.addRow(self.framerate_input)
+        framerate_group.setLayout(framerate_form)
+        self.framerate_input.editingFinished.connect(self._on_framerate_editing_finished)
+        self.framerate_input.setKeyboardTracking(False)
+        video_settings_layout.addWidget(framerate_group)
+
+        resolution_group = QGroupBox("Resolution")
+        resolution_form = QFormLayout()
+        self.resolution_input = QLineEdit()
+        self.resolution_input.setText("640x480")
+        resolution_form.addRow(self.resolution_input)
+        resolution_group.setLayout(resolution_form)
+        self.resolution_input.editingFinished.connect(self._on_resolution_editing_finished)
+        video_settings_layout.addWidget(resolution_group)
+
+        scroll_content_layout.addLayout(video_settings_layout)
 
         # Image controls
         image_controls_layout = QHBoxLayout()
@@ -192,17 +206,45 @@ class ControlPanel(QWidget):
         self._current_camera = self.camera_combo.currentText()
         self._load_camera_settings(self._current_camera)
 
-    def _on_bitrate_editing_finished(self) -> None:
-        """Handle bitrate input finish (e.g. Enter pressed)."""
-        value = self.bitrate_input.value()
-        self._on_bitrate_changed(value)
+    def _on_framerate_editing_finished(self) -> None:
+        """Handle framerate input finish (e.g. Enter pressed)."""
+        value = self.framerate_input.value()
+        cam = getattr(self, "_current_camera", None)
 
-    def _on_bitrate_changed(self, value: int) -> None:
-        """Internal slot to normalise bitrate value, store it and emit signal."""
+        # Check if value has changed
+        if cam and cam in self.camera_settings:
+            current_val = self.camera_settings[cam]["Video"].get("framerate")
+            if current_val == value:
+                return
+
+        print(f"Camera '{cam}' switching framerate to {value}")
+        self._on_framerate_changed(value)
+
+    def _on_framerate_changed(self, value: int) -> None:
         cam = getattr(self, "_current_camera", None)
         if cam and cam in self.camera_settings:
-            self.camera_settings[cam]["Video"]["bitrate"] = int(value)
-        self.bitrateChanged.emit(value)
+            self.camera_settings[cam]["Video"]["framerate"] = int(value)
+        self.framerateChanged.emit(value)
+
+    def _on_resolution_editing_finished(self) -> None:
+        """Handle resolution input finish (e.g. Enter pressed)."""
+        value = self.resolution_input.text()
+        cam = getattr(self, "_current_camera", None)
+
+        # Check if value has changed
+        if cam and cam in self.camera_settings:
+            current_val = self.camera_settings[cam]["Video"].get("resolution")
+            if current_val == value:
+                return
+
+        print(f"Camera '{cam}' switching resolution to {value}")
+        self._on_resolution_changed(value)
+
+    def _on_resolution_changed(self, value: str) -> None:
+        cam = getattr(self, "_current_camera", None)
+        if cam and cam in self.camera_settings:
+            self.camera_settings[cam]["Video"]["resolution"] = str(value)
+        self.resolutionChanged.emit(value)
 
     def _on_brightness_changed(self, value: int) -> None:
         cam = getattr(self, "_current_camera", None)
@@ -246,7 +288,7 @@ class ControlPanel(QWidget):
     # --- Helper methods for per-camera settings ---
     def _default_settings(self) -> dict:
         return {
-            "Video": {"bitrate": 2000},
+            "Video": {"framerate": 30, "resolution": "640x480"},
             "Image": {"brightness": 0, "zoom": 1},
             "Stream": {"bandwidth": None, "connected": False, "streaming": False},
         }
@@ -257,7 +299,8 @@ class ControlPanel(QWidget):
         if not cam or cam not in self.camera_settings:
             return
         s = self.camera_settings[cam]
-        s["Video"]["bitrate"] = int(self.bitrate_input.value())
+        s["Video"]["framerate"] = int(self.framerate_input.value())
+        s["Video"]["resolution"] = self.resolution_input.text()
         s["Image"]["brightness"] = int(self.brightness_slider.value())
         s["Image"]["zoom"] = int(self.zoom_slider.value())
 
@@ -267,15 +310,18 @@ class ControlPanel(QWidget):
             return
         s = self.camera_settings[cam]
         # block signals while setting values to avoid emitting events
-        self.bitrate_input.blockSignals(True)
+        self.framerate_input.blockSignals(True)
+        self.resolution_input.blockSignals(True)
         self.brightness_slider.blockSignals(True)
         self.zoom_slider.blockSignals(True)
         try:
-            self.bitrate_input.setValue(int(s["Video"].get("bitrate", 2000)))
+            self.framerate_input.setValue(int(s["Video"].get("framerate", 30)))
+            self.resolution_input.setText(s["Video"].get("resolution", "640x480"))
             self.brightness_slider.setValue(int(s["Image"].get("brightness", 0)))
             self.zoom_slider.setValue(int(s["Image"].get("zoom", 1)))
         finally:
-            self.bitrate_input.blockSignals(False)
+            self.framerate_input.blockSignals(False)
+            self.resolution_input.blockSignals(False)
             self.brightness_slider.blockSignals(False)
             self.zoom_slider.blockSignals(False)
 
