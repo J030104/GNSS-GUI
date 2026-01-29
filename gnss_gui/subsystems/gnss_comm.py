@@ -498,21 +498,31 @@ class GNSSCommWidget(QWidget):
                     self.log_viewer.append(f"Error starting local stream: {e}")
             return
 
-        # --- 2. USB CAMERAS (LOCALHOST DEMO) ---
+        # --- 2. USB CAMERAS (ROS2 or LOCALHOST DEMO) ---
         if cam_name in [CAMERA_NAMES["USB_LEFT"], CAMERA_NAMES["USB_RIGHT"]]:
             try:
-                is_left = (cam_name == CAMERA_NAMES["USB_LEFT"])
-                target_port = CAMERA_PORTS["USB_LEFT"] if is_left else CAMERA_PORTS["USB_RIGHT"]
+                # First, check if a ROS subscriber is registered for this camera
+                ros_cam = CameraManager.get_camera(cam_name)
                 
-                # Setup Network Stream
-                opts = NetworkStreamOptions(
-                    proto="udp",
-                    host=ROVER_IP,  # Uses 127.0.0.1 from Config
-                    port=target_port,
-                    path="",
-                    buffer_size=1
-                )
-                net_cam = NetworkStreamCamera(options=opts)
+                if ros_cam is not None:
+                    # Use the ROS2 subscriber
+                    net_cam = ros_cam
+                    self.log_viewer.append(f"Using ROS2 subscriber for {cam_name}")
+                else:
+                    # Fallback to UDP network stream
+                    is_left = (cam_name == CAMERA_NAMES["USB_LEFT"])
+                    target_port = CAMERA_PORTS["USB_LEFT"] if is_left else CAMERA_PORTS["USB_RIGHT"]
+                    
+                    # Setup Network Stream
+                    opts = NetworkStreamOptions(
+                        proto="udp",
+                        host=ROVER_IP,  # Uses 127.0.0.1 from Config
+                        port=target_port,
+                        path="",
+                        buffer_size=1
+                    )
+                    net_cam = NetworkStreamCamera(options=opts)
+                    self.log_viewer.append(f"Using UDP stream for {cam_name}")
                 
                 # Find specific viewer
                 target = None

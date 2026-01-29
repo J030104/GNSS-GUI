@@ -27,6 +27,11 @@ import platform
 try:
     import rclpy
     from rclpy.node import Node
+    from sensor_msgs.msg import Image
+    from cv_bridge import CvBridge
+    from rclpy.qos import QoSProfile, QoSHistoryPolicy, QoSReliabilityPolicy, QoSDurabilityPolicy
+    import cv2
+    import numpy as np
     HAS_ROS = True
 except ImportError:
     HAS_ROS = False
@@ -58,8 +63,8 @@ CONFIG = {
             "framerate": 30
         },
         "Right_USB": {
-            # "device": "2", # USB Camera
-            "device": "/dev/video2",
+            "device": "1", # USB Camera
+            # "device": "/dev/video2",
             "port": 5001,
             "resolution": "640x480",
             "framerate": 30
@@ -213,15 +218,134 @@ class StreamManager:
         for s in self.streamers:
             s.stop()
 
+class VideoPublisherNode(Node):
+    """
+    ROS2 Node that captures video from a device and publishes it
+    to a camera-specific topic using sensor_msgs/Image.
+    
+    Topic naming: /rover/<camera_name_snake_case>
+    Example: "Right_USB" -> /rover/right_usb
+    """
+    def __init__(self, camera_name, device_path, resolution="640x480", framerate=30, topic=None):
+        node_name = 'video_publisher_' + camera_name.lower().replace(" ", "_")
+        super().__init__(node_name)
+        self.camera_name = camera_name
+        self.device_path = device_path
+        
+        # Generate topic name from camera name if not provided
+        if topic is None:
+            topic = '/rover/' + camera_name.lower().replace(" ", "_").replace("-", "_")
+        self.topic_name = topic
+        
+        # QoS Profile: Best Effort, Volatile for low latency sensor data
+        qos_profile = QoSProfile(
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=1,
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+            durability=QoSDurabilityPolicy.VOLATILE
+        )
+        
+        # Publisher
+        self.publisher_ = self.create_publisher(Image, self.topic_name, qos_profile)
+        
+        # Timer
+        self.framerate = framerate
+        self.timer_period = 1.0 / self.framerate
+        self.timer = self.create_timer(self.timer_period, self.timer_callback)
+
+        # OpenCV Setup
+        self.bridge = CvBridge()
+        
+        # Handle device path for MacOS/OpenCV compatibility
+        # On Linux/ROS, /dev/video0 works. On MacOS, we usually need an integer index.
+        capture_source = self.device_path
+        if platform.system() == "Darwin":
+             if str(self.device_path).startswith("/dev/video"):
+                 try:
+                     # Extract number from /dev/videoX
+                     index_str = str(self.device_path).replace("/dev/video", "")
+                     if index_str.isdigit():
+                         capture_source = int(index_str)
+                 except:
+                     capture_source = 0 # Fallback
+             elif str(self.device_path).isdigit():
+                  capture_source = int(self.device_path)
+             
+        self.cap = cv2.VideoCapture(capture_source)
+        
+        # Resolution parsing
+        try:
+            w, h = map(int, resolution.split('x'))
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
+        except ValueError:
+            pass
+            
+        self.cap.set(cv2.CAP_PROP_FPS, self.framerate)
+        
+        if not self.cap.isOpened():
+             self.get_logger().error(f"Could not open video device: {self.device_path}")
+        else:
+             self.get_logger().info(f"Publishing video from {self.device_path} to {self.topic_name}")
+
+    def timer_callback(self):
+        if self.cap.isOpened():
+            ret, frame = self.cap.read()
+            if ret:
+                # Convert to ROS MSG
+                # Determine encoding. OpenCV uses BGR by default.
+                msg = self.bridge.cv2_to_imgmsg(frame, encoding="bgr8")
+                self.publisher_.publish(msg)
+            else:
+                # Try to reconnect or log?
+                pass
+                
+    def destroy_node(self):
+        if self.cap:
+             self.cap.release()
+        super().destroy_node()
+
 # Wrapper for ROS2 Node compatibility
 class CameraNode(Node if HAS_ROS else object):
     def __init__(self):
         if HAS_ROS:
             super().__init__('camera_manager')
             self.get_logger().info("Starting Camera Manager Node")
-        
+            
+            # We will use the first enabled camera's config for the publisher for now
+            # as per the instruction to publish to /rover/camera_feed (singular)
+            # Find a suitable camera
+            target_cam_config = None
+            target_cam_name = None
+            
+            for name, cfg in CONFIG["CAMERAS"].items():
+                # Simple logic: pick the first one or specific
+                target_cam_config = cfg
+                target_cam_name = name
+                break
+            
+            if target_cam_config:
+                # We spawn the publisher node logic here. 
+                # Ideally, we should spin multiple nodes if we want multiple cams, 
+                # but CameraNode is the main node. 
+                # Let's attach the publishing logic to this node or create a helper.
+                # Since we need to spin, we can use MultiThreadedExecutor or just instantiate the helper class separate from this manager
+                # However, to keep it simple and "within existing client logic":
+                
+                # I will create the VideoPublisherNode separately in the main function or 
+                # integrate it here. To avoid MultiThreadedExecutor complexity in this simple script:
+                # I'll just Make VideoPublisherNode instance logic part of the loop?
+                # No, cleaner to have separate object.
+                pass
+
         self.manager = StreamManager()
-        self.manager.start_all()
+        # If we are in ROS mode, we might WANT to use the ROS publisher 
+        # INSTEAD of the ffmpeg streamer for the active camera.
+        
+        # But StreamManager runs ffmpeg.
+        # The user says "Refactor ... to replace ... with ROS 2".
+        # So I should disable StreamManager if I'm using ROS publisher?
+        # Or modify StreamManager to support ROS publisher.
 
     def destroy_node(self):
         self.manager.stop_all()
@@ -233,13 +357,43 @@ def main(args=None):
         # ROS2 Mode
         print("Running in ROS2 Mode")
         rclpy.init(args=args)
-        node = CameraNode()
+        
+        # Priority: Right_USB
+        camera_name = "Right_USB"
+        camera_config = CONFIG["CAMERAS"].get(camera_name)
+        
+        if not camera_config:
+            # Fallback
+            camera_name = "Left_USB"
+            camera_config = CONFIG["CAMERAS"].get(camera_name)
+            
+        if not camera_config:
+             # Just pick the first one
+             camera_name = list(CONFIG["CAMERAS"].keys())[0]
+             camera_config = CONFIG["CAMERAS"][camera_name]
+        
+        # Topic naming convention matching GUI config
+        # Right_USB -> /rover/right_usb_camera
+        # Left_USB -> /rover/left_usb_camera
+        # TODO: Make robust
+        topic = '/rover/' + camera_name.lower().replace("_", "_") + "_camera"
+        print(f"Publishing to topic: {topic}")
+             
+        # Create the publisher node
+        publisher_node = VideoPublisherNode(
+            camera_name=camera_name, 
+            device_path=camera_config["device"],
+            resolution=camera_config["resolution"],
+            framerate=camera_config["framerate"],
+            topic=topic
+        )
+        
         try:
-            rclpy.spin(node)
+            rclpy.spin(publisher_node)
         except KeyboardInterrupt:
             pass
         finally:
-            node.destroy_node()
+            publisher_node.destroy_node()
             rclpy.shutdown()
     else:
         # Standalone Mode

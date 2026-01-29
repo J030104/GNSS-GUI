@@ -8,6 +8,11 @@ application simply run:
 """
 
 import sys
+import pkgutil
+# Workaround for 'pkgutil' has no attribute 'ImpImporter' on some systems with newer setuptools
+if not hasattr(pkgutil, 'ImpImporter'):
+    pkgutil.ImpImporter = type('ImpImporter', (object,), {})
+
 from typing import Optional
 
 from PyQt5.QtWidgets import QApplication, QMainWindow, QTabWidget
