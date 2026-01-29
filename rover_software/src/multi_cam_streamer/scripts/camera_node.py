@@ -27,6 +27,7 @@ import platform
 try:
     import rclpy
     from rclpy.node import Node
+    from rclpy.executors import MultiThreadedExecutor
     from sensor_msgs.msg import Image
     from cv_bridge import CvBridge
     from rclpy.qos import QoSProfile, QoSHistoryPolicy, QoSReliabilityPolicy, QoSDurabilityPolicy
@@ -56,37 +57,45 @@ CONFIG = {
     #   - framerate: FPS
     "CAMERAS": {
         "Left_USB": {
-            # "device": "0", # Arducam (Updated from [2] to [1])
-            "device": "/dev/video0",
+            "enabled": True,
+            "device": "2",  # Left USB Camera
             "port": 5000,
             "resolution": "640x480",
-            "framerate": 30
+            "framerate": 30,
+            "topic": "/rover/left_usb_camera"
         },
         "Right_USB": {
-            "device": "1", # USB Camera
-            # "device": "/dev/video2",
+            "enabled": True,
+            "device": "1",  # Right USB Camera
             "port": 5001,
             "resolution": "640x480",
-            "framerate": 30
+            "framerate": 30,
+            "topic": "/rover/right_usb_camera"
         },
         # Placeholders for future expansion
         "Dual_Cam_1": {
-            "device": "/dev/video4", # Placeholder
+            "enabled": False,
+            "device": "/dev/video4",
             "port": 5002,
             "resolution": "640x480",
-            "framerate": 30
+            "framerate": 30,
+            "topic": "/rover/dual_camera_1"
         },
         "Dual_Cam_2": {
-            "device": "/dev/video6", # Placeholder
+            "enabled": False,
+            "device": "/dev/video6",
             "port": 5003,
             "resolution": "640x480",
-            "framerate": 30
+            "framerate": 30,
+            "topic": "/rover/dual_camera_2"
         },
         "Insta360": {
-            "device": "/dev/video8", # Placeholder
+            "enabled": False,
+            "device": "/dev/video8",
             "port": 8554,
             "resolution": "1920x1080",
-            "framerate": 30
+            "framerate": 30,
+            "topic": "/rover/insta360"
         }
     },
 
@@ -354,46 +363,57 @@ class CameraNode(Node if HAS_ROS else object):
 
 def main(args=None):
     if HAS_ROS:
-        # ROS2 Mode
+        # ROS2 Mode - Create a publisher node for each enabled camera
         print("Running in ROS2 Mode")
         rclpy.init(args=args)
         
-        # Priority: Right_USB
-        camera_name = "Right_USB"
-        camera_config = CONFIG["CAMERAS"].get(camera_name)
+        # Use MultiThreadedExecutor to spin multiple nodes
+        executor = MultiThreadedExecutor()
+        publisher_nodes = []
         
-        if not camera_config:
-            # Fallback
-            camera_name = "Left_USB"
-            camera_config = CONFIG["CAMERAS"].get(camera_name)
+        for camera_name, camera_config in CONFIG["CAMERAS"].items():
+            # Skip disabled cameras
+            if not camera_config.get("enabled", False):
+                print(f"[{camera_name}] Disabled, skipping...")
+                continue
             
-        if not camera_config:
-             # Just pick the first one
-             camera_name = list(CONFIG["CAMERAS"].keys())[0]
-             camera_config = CONFIG["CAMERAS"][camera_name]
+            topic = camera_config.get("topic")
+            if not topic:
+                # Fallback topic naming
+                topic = '/rover/' + camera_name.lower().replace("_", "_") + "_camera"
+            
+            print(f"[{camera_name}] Creating publisher for topic: {topic}")
+            
+            try:
+                node = VideoPublisherNode(
+                    camera_name=camera_name,
+                    device_path=camera_config["device"],
+                    resolution=camera_config["resolution"],
+                    framerate=camera_config["framerate"],
+                    topic=topic
+                )
+                publisher_nodes.append(node)
+                executor.add_node(node)
+            except Exception as e:
+                print(f"[{camera_name}] Failed to create publisher: {e}")
         
-        # Topic naming convention matching GUI config
-        # Right_USB -> /rover/right_usb_camera
-        # Left_USB -> /rover/left_usb_camera
-        # TODO: Make robust
-        topic = '/rover/' + camera_name.lower().replace("_", "_") + "_camera"
-        print(f"Publishing to topic: {topic}")
-             
-        # Create the publisher node
-        publisher_node = VideoPublisherNode(
-            camera_name=camera_name, 
-            device_path=camera_config["device"],
-            resolution=camera_config["resolution"],
-            framerate=camera_config["framerate"],
-            topic=topic
-        )
+        if not publisher_nodes:
+            print("No cameras enabled. Exiting.")
+            rclpy.shutdown()
+            return
+        
+        print(f"Started {len(publisher_nodes)} camera publisher(s)")
         
         try:
-            rclpy.spin(publisher_node)
+            executor.spin()
         except KeyboardInterrupt:
             pass
         finally:
-            publisher_node.destroy_node()
+            for node in publisher_nodes:
+                try:
+                    node.destroy_node()
+                except Exception:
+                    pass
             rclpy.shutdown()
     else:
         # Standalone Mode
