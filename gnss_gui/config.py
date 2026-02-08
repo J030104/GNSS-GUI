@@ -5,7 +5,7 @@ This file contains connection details, camera definitions, and network settings.
 """
 
 # Connection Settings
-ROVER_IP = "127.0.0.1"
+ROVER_IP = "192.168.53.136"
 
 
 # ==============================================================================
@@ -29,7 +29,7 @@ ROVER_CAMERAS = {
         "id": "Left_USB",
         "transport": "udp",
         "topic": "/rover/left_usb_camera",
-        "host": "127.0.0.1",
+        "host": ROVER_IP,
         "device": "2",  # From camera_node.py
         "port": 5000,
         "default_res": "640x480",
@@ -41,7 +41,7 @@ ROVER_CAMERAS = {
         "id": "Right_USB",
         "transport": "udp",
         "topic": "/rover/right_usb_camera",
-        "host": "127.0.0.1",
+        "host": ROVER_IP,
         "device": "0",  # From camera_node.py
         "port": 5001,
         "default_res": "640x480",

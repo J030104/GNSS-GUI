@@ -36,8 +36,10 @@ try:
     import cv2
     import numpy as np
     HAS_ROS = True
+    print("HAS_ROS = True")
 except ImportError as e:
-    HAS_ROS = False
+    HAS_ROS = False 
+    print("HAS_ROS = False (or other dependency problems)")
     ROS_IMPORT_ERROR = e
 
 # ==============================================================================
@@ -46,7 +48,7 @@ except ImportError as e:
 CONFIG = {
     # IP address of the machine running the GUI (where to send UDP video).
     # CHANGE THIS to the actual IP of your laptop when running on the rover.
-    "CLIENT_IP": "127.0.0.1",
+    "CLIENT_IP": "192.168.53.124",
 
     # FFmpeg executable
     "FFMPEG_BIN": "ffmpeg",
@@ -62,7 +64,7 @@ CONFIG = {
     "CAMERAS": {
         "Left_USB": {
             "enabled": True,
-            "device": "0",  # Swapped for Debug
+            "device": "/dev/video2",  # Swapped for Debug
             "port": 5000,
             "resolution": "640x480",
             "framerate": 30,
@@ -70,7 +72,7 @@ CONFIG = {
         },
         "Right_USB": {
             "enabled": True,
-            "device": "2",  # Swapped for Debug
+            "device": "/dev/video0",  # Swapped for Debug
             "port": 5001,
             "resolution": "640x480",
             "framerate": 30,
