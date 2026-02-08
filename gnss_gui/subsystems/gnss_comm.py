@@ -13,13 +13,13 @@ from typing import Optional
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QMessageBox, QListWidget, QPushButton, QLabel, QSplitter
 
-from ..components import VideoViewer, MapViewer, ControlPanel, LogViewer, ShellTabs, TelemetryPanel
+from ..components import VideoViewer, MapViewer, ControlPanel, LogViewer, ShellTabs
 from ..components.video_layout_tabs import VideoLayoutTabWidget
-from ..utilities.connection_manager import ConnectionManager, SSHConfig
+from ..utilities.connection_manager import ConnectionManager
 from ..utilities.video_streamer import VideoStreamer, CameraManager, CameraSource, FfplayReceiver, FfplayOptions, NetworkStreamCamera, NetworkStreamOptions
 from ..utilities.rover_stream_client import RoverStreamClient, StreamRequestParams
 # Import Config
-from ..config import CAMERA_NAMES, CAMERA_PORTS, ROVER_IP
+from ..config import CAMERA_NAMES, CAMERA_PORTS, ROVER_CAMERAS, ROVER_IP, get_rover_id_by_name
 
 try:
     from ..utilities.telemetry_client import TelemetryClient
@@ -31,18 +31,19 @@ TELEMETRY_UPDATE_MS = 500 # Update telemetry overlay every 500 ms
 class GNSSCommWidget(QWidget):
     """Widget containing all GUI elements for the GNSS & Communication subsystem."""
 
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, parent: Optional[QWidget] = None, status_bar=None) -> None:
         super().__init__(parent)
 
+        self._status_bar = status_bar
         self._init_data() # Video streamer, connection manager, state
         self._init_ui()
-        self._init_connections() # control panel signals
+        self._init_signal_connections() # control panel signals
         self._init_timers()
-        self._connect_to_rover()
+        # self._connect_to_rover()
 
     def _init_data(self) -> None:
         """Initialize data structures and configurations."""
-        self.connection = ConnectionManager(SSHConfig(host="jetson.local"))
+        self.connection = ConnectionManager()
         self.video_streamer = None
         # ffplay-based external receiver for Insta360 or other remote streams
         self._ffplay = FfplayReceiver()
@@ -125,8 +126,6 @@ class GNSSCommWidget(QWidget):
         self.control_panel = ControlPanel()
         self.log_viewer = LogViewer()
         self.shell_tabs = ShellTabs(log_viewer=self.log_viewer)
-        self.telemetry_panel = TelemetryPanel()
-
         self._parameter_camera = self.control_panel._current_camera
 
         # Toggle Map Button
@@ -135,6 +134,7 @@ class GNSSCommWidget(QWidget):
         self.map_toggle_button.setFixedSize(30, 30)
         self.map_toggle_button.setToolTip("Toggle Map")
         self.map_toggle_button.clicked.connect(self._toggle_map)
+        self.control_panel.set_camera_prefix_widget(self.map_toggle_button)
 
         # Layouts
         top_widget = self._create_top_widget()
@@ -172,13 +172,11 @@ class GNSSCommWidget(QWidget):
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
 
-        # Button container at the top
+        # Button container at the top (kept for spacing/alignment if needed)
         button_container = QWidget()
         button_layout = QHBoxLayout()
         button_layout.setContentsMargins(0, 0, 0, 0)
-        button_layout.addWidget(self.map_toggle_button)
         button_layout.addStretch()
-        button_layout.addWidget(self.telemetry_panel)
         button_container.setLayout(button_layout)
 
         layout.addWidget(button_container)
@@ -206,7 +204,7 @@ class GNSSCommWidget(QWidget):
         self.shell_tabs.setMinimumHeight(60)
         return widget
 
-    def _init_connections(self) -> None:
+    def _init_signal_connections(self) -> None:
         # Connect control panel signals to actions
         self.control_panel.cameraChanged.connect(self.on_camera_changed)
         self.control_panel.framerateChanged.connect(self.on_framerate_changed)
@@ -239,10 +237,12 @@ class GNSSCommWidget(QWidget):
         # Start initial connection
         # TODO: Implement retry logic and error handling
         if self.connection.connect():
-            self.control_panel.set_connection_status(True)
+            if self._status_bar is not None:
+                self._status_bar.set_connection_status(True)
             self.log_viewer.append("Connected to rover")
         else:
-            self.control_panel.set_connection_status(False)
+            if self._status_bar is not None:
+                self._status_bar.set_connection_status(False)
             self.log_viewer.append("Failed to connect to rover")
 
     def _toggle_map(self) -> None:
@@ -430,13 +430,71 @@ class GNSSCommWidget(QWidget):
         except Exception:
             pass
 
+    def _map_display_name_to_id(self, display_name: str) -> Optional[str]:
+        # Use centralized helper from config.py
+        rid = get_rover_id_by_name(display_name)
+        
+        if rid is None:
+             self.log_viewer.append(f"Warning: Could not map display name '{display_name}' to a Rover ID.")
+             
+        return rid
+
     def on_framerate_changed(self, value: int) -> None:
-        cam = getattr(self, "_parameter_camera", "Unknown")
-        self.log_viewer.append(f"Camera '{cam}' switching framerate to {value}")
+        # Prioritize the camera selected in the Control Panel dropdown to avoid ambiguity
+        cam_display_name = self.control_panel._current_camera
+
+        self.log_viewer.append(f"Camera '{cam_display_name}' switching framerate to {value}")
+        
+        rover_id = self._map_display_name_to_id(cam_display_name)
+        if not rover_id:
+             return
+
+        # Get current resolution to preserve it
+        settings = self.control_panel.get_camera_settings(cam_display_name)
+        current_res = settings["Video"].get("resolution", "640x480")
+
+        try:
+             client = RoverStreamClient.instance()
+             # Create params with new framerate
+             params = StreamRequestParams(
+                 camera_id=rover_id,
+                 resolution=current_res,
+                 framerate=value,
+                 bitrate_kbps=2000 # Default or from settings if available
+             )
+             self.log_viewer.append(f"Requesting stream restart for {rover_id} with {value}fps...")
+             client.restart_stream(params)
+             self.log_viewer.append("Restart command sent.")
+        except Exception as e:
+             self.log_viewer.append(f"Failed to restart stream: {e}")
 
     def on_resolution_changed(self, value: str) -> None:
-        cam = getattr(self, "_parameter_camera", "Unknown")
-        self.log_viewer.append(f"Camera '{cam}' switching resolution to {value}")
+        # Prioritize the camera selected in the Control Panel dropdown to avoid ambiguity
+        cam_display_name = self.control_panel._current_camera
+
+        self.log_viewer.append(f"Camera '{cam_display_name}' switching resolution to {value}")
+        
+        rover_id = self._map_display_name_to_id(cam_display_name)
+        if not rover_id:
+             return
+
+        # Get current framerate
+        settings = self.control_panel.get_camera_settings(cam_display_name)
+        current_fps = settings["Video"].get("framerate", 30)
+
+        try:
+             client = RoverStreamClient.instance()
+             params = StreamRequestParams(
+                 camera_id=rover_id,
+                 resolution=value,
+                 framerate=current_fps,
+                 bitrate_kbps=2000
+             )
+             self.log_viewer.append(f"Requesting stream restart for {rover_id} with {value}...")
+             client.restart_stream(params)
+             self.log_viewer.append("Restart command sent.")
+        except Exception as e:
+             self.log_viewer.append(f"Failed to restart stream: {e}")
 
     def on_brightness_changed(self, value: int) -> None:
         # Update per-camera stored settings (ControlPanel already does this)
@@ -474,7 +532,7 @@ class GNSSCommWidget(QWidget):
             cam = CameraManager.get_camera('local')
             if cam is not None:
                 try:
-                    # STRICT MATCH: Only attach to 'Local' viewer
+                    # STRICT MATCH: Only attach to 'Local' viewerpw
                     target = None
                     for v in viewers:
                         vname = getattr(v, 'camera_name', '')
@@ -498,31 +556,54 @@ class GNSSCommWidget(QWidget):
                     self.log_viewer.append(f"Error starting local stream: {e}")
             return
 
-        # --- 2. USB CAMERAS (ROS2 or LOCALHOST DEMO) ---
-        if cam_name in [CAMERA_NAMES["USB_LEFT"], CAMERA_NAMES["USB_RIGHT"]]:
+        # --- 2. ROVER CAMERAS (Dynamic Lookup) ---
+        rover_cam_id = self._map_display_name_to_id(cam_name)
+        if rover_cam_id:
             try:
-                # First, check if a ROS subscriber is registered for this camera
-                ros_cam = CameraManager.get_camera(cam_name)
+                # Retrieve current desired settings from UI
+                settings = self.control_panel.get_camera_settings(cam_name)
+                res = settings["Video"].get("resolution", "640x480")
+                fps = settings["Video"].get("framerate", 30)
+
+                # Request stream start from Rover Node
+                client = RoverStreamClient.instance()
+                params = StreamRequestParams(
+                    camera_id=rover_cam_id,
+                    resolution=res,
+                    framerate=fps,
+                    bitrate_kbps=2000
+                )
+                self.log_viewer.append(f"Requesting start for {rover_cam_id}...")
+                stream_url = client.start_stream(params)
+                self.log_viewer.append(f"Stream available at {stream_url}")
+
+                # Configure Receiver based on returned URL
+                # Basic parsing for udp://HOST:PORT
+                host = ROVER_IP
+                port = 0
                 
-                if ros_cam is not None:
-                    # Use the ROS2 subscriber
-                    net_cam = ros_cam
-                    self.log_viewer.append(f"Using ROS2 subscriber for {cam_name}")
-                else:
-                    # Fallback to UDP network stream
-                    is_left = (cam_name == CAMERA_NAMES["USB_LEFT"])
-                    target_port = CAMERA_PORTS["USB_LEFT"] if is_left else CAMERA_PORTS["USB_RIGHT"]
+                if stream_url.startswith("udp://"):
+                    # expected format: udp://1.2.3.4:5000 or udp://1.2.3.4:5000?options
+                    clean_url = stream_url.replace("udp://", "")
+                    if "?" in clean_url:
+                        clean_url = clean_url.split("?")[0]
                     
-                    # Setup Network Stream
-                    opts = NetworkStreamOptions(
-                        proto="udp",
-                        host=ROVER_IP,  # Uses 127.0.0.1 from Config
-                        port=target_port,
-                        path="",
-                        buffer_size=1
-                    )
-                    net_cam = NetworkStreamCamera(options=opts)
-                    self.log_viewer.append(f"Using UDP stream for {cam_name}")
+                    parts = clean_url.split(":")
+                    if len(parts) >= 2:
+                        host = parts[0]
+                        port = int(parts[1])
+                
+                if port == 0:
+                     self.log_viewer.append(f"Could not parse port from URL: {stream_url}")
+                     return
+
+                opts = NetworkStreamOptions(
+                    proto="udp",
+                    host=host,
+                    port=port,
+                    buffer_size=1
+                )
+                net_cam = NetworkStreamCamera(options=opts)
                 
                 # Find specific viewer
                 target = None
@@ -545,13 +626,12 @@ class GNSSCommWidget(QWidget):
                     self._attached_viewers = attached
                     self._attached_camera = net_cam
                     net_cam.start()
-            except Exception as e:
-                self.log_viewer.append(f"Error starting USB stream: {e}")
-            return
 
-        # --- 3. REMOTE ROVER CAMERAS (Placeholders) ---
-        # Dual 1, Dual 2, Insta360 - Just Log for now
-        self.log_viewer.append(f"Camera '{cam_name}' is a placeholder in this prototype.")
+            except Exception as e:
+                self.log_viewer.append(f"Error starting stream: {e}")
+            return
+            
+        self.log_viewer.append(f"Camera '{cam_name}' not defined in ROVER_CAMERAS.")
 
     def on_stop_stream(self) -> None:
         cam_name = getattr(self.control_panel, '_current_camera', None)
@@ -626,14 +706,15 @@ class GNSSCommWidget(QWidget):
             latency = sample.latency_ms
             battery = sample.battery_pct
 
-        try:
-            self.telemetry_panel.set_telemetry(
-                rssi_dbm=rssi,
-                latency_ms=latency,
-                battery_pct=battery,
-            )
-        except Exception:
-            pass
+        if self._status_bar is not None:
+            try:
+                self._status_bar.set_telemetry(
+                    rssi_dbm=rssi,
+                    latency_ms=latency,
+                    battery_pct=battery,
+                )
+            except Exception:
+                pass
 
     # --- Helpers for remote stream URL construction ---
     def _build_remote_url(self) -> str:

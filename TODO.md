@@ -14,7 +14,6 @@
 
 ### Shells & Logs
 - [ ] Fix shell tab autocomplete quirks.
-- [ ] Test shell tabbing with multiple active SSH sessions.
 
 ### Notes
 - Shell tab tiling may still contain bugs.

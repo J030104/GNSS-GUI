@@ -1,10 +1,6 @@
-"""Manage network/SSH connections to the rover.
+"""Manage network connections/bandwidth aggregation.
 
-This module provides a simple abstraction for establishing an SSH
-connection to the rover’s onboard computer (e.g. NVIDIA Jetson).  In
-the prototype the connection is simulated.  Future implementations
-could rely on ``paramiko`` or another SSH library to establish an
-actual connection, run commands, and retrieve telemetry.
+This module provides a simple abstraction for tracking bandwidth usage.
 """
 
 from __future__ import annotations
@@ -14,41 +10,28 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
+# Import other utilities for bandwidth aggregation
+# Use try-except to avoid circular imports if any, or import errors during testing
+try:
+    from .telemetry_client import TelemetryClient
+    from .video_streamer import CameraManager
+except ImportError:
+    TelemetryClient = None
+    CameraManager = None
 
-@dataclass
-class SSHConfig:
-    host: str
-    port: int = 22
-    username: str = ""
-    password: str = ""
 
 
 class ConnectionManager:
-    """Encapsulate an SSH connection to the rover.
 
-    Parameters
-    ----------
-    config : SSHConfig
-        Connection parameters such as host, port, username and password.
-    """
+    """Manage connection status and bandwidth stats."""
 
-    def __init__(self, config: SSHConfig) -> None:
-        # TODO: Store config parameters and use them to establish real SSH connection.
-        self.config = config
-        self.connected: bool = False
+    def __init__(self) -> None:
+        self.connected: bool = True
 
     def connect(self) -> bool:
-        """Attempt to establish the SSH connection.
-
-        Returns
-        -------
-        bool
-            ``True`` if the connection succeeds, ``False`` otherwise.
-        """
-        # In the prototype we simply simulate a connection attempt.
-        time.sleep(0.5)  # simulate network delay
-        self.connected = True  # always succeed
-        return self.connected
+        """No-op for compatibility."""
+        self.connected = True
+        return True
 
     def disconnect(self) -> None:
         """Close the connection."""
@@ -58,7 +41,40 @@ class ConnectionManager:
         return self.connected
 
     def get_bandwidth(self) -> float:
-        """Return a simulated bandwidth usage in kbps."""
+        """Return the aggregated bandwidth usage in kbps.
+        
+        If real telemetry/video data is detected, returns the actual usage.
+        Otherwise falls back to simulation for demo purposes.
+        """
+        real_bandwidth = 0.0
+        has_real_sources = False
+
+        # Get telemetry bandwidth
+        if TelemetryClient:
+            try:
+                client = TelemetryClient.instance()
+                if client:
+                    bw = client.get_bandwidth()
+                    real_bandwidth += bw
+                    if bw > 0:
+                        has_real_sources = True
+            except Exception:
+                pass
+
+        # Get video bandwidth
+        if CameraManager:
+            try:
+                bw = CameraManager.get_total_bandwidth()
+                real_bandwidth += bw
+                if bw > 0:
+                    has_real_sources = True
+            except Exception:
+                pass
+
+        # If we detected any real data flow, return it
+        if has_real_sources:
+            return real_bandwidth
+
         if not self.connected:
             return 0.0
         # Simulate bandwidth between 500 kbps and 3 Mbps

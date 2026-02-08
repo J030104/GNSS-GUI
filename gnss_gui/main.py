@@ -38,9 +38,13 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(800, 600)
         self.setMaximumSize(1920, 1080)
 
+        # Status bar
+        self.status_bar = StatusBar()
+        self.setStatusBar(self.status_bar)
+
         # Create tab widget for subsystems
         self.tabs = QTabWidget()
-        self.tabs.addTab(GNSSCommWidget(), "GNSS & Communication")
+        self.tabs.addTab(GNSSCommWidget(status_bar=self.status_bar), "GNSS & Communication")
         # self.tabs.addTab(AutonomousNavigationWidget(), "Autonomous Navigation")
         # self.tabs.addTab(PowerElectronicsWidget(), "Power & Electronics")
         # self.tabs.addTab(RoboticArmDeliveryWidget(), "Robotic Arm & Delivery")
@@ -48,9 +52,7 @@ class MainWindow(QMainWindow):
         # self.tabs.addTab(DroneWidget(), "Drone")
         self.setCentralWidget(self.tabs)
 
-        # Status bar
-        self.status_bar = StatusBar()
-        self.setStatusBar(self.status_bar)
+
 
     def closeEvent(self, event):  # type: ignore[override]
         """Perform any necessary cleanup on close."""

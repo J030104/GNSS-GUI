@@ -1,43 +1,24 @@
 """
 RoverStreamClient: ROS2 client utilities for controlling rover video streams.
 
-This module is designed to fit into the existing GNSS-GUI project
-without requiring changes to other modules' public interfaces.
+This module uses direct ROS 2 command line calls (via subprocess) to interact
+with the rover's camera manager service.
 
 Usage pattern (typical):
 
     client = RoverStreamClient()
     url = client.start_stream("cam_front", bitrate_kbps=2000, codec="libx264")
-    # url might be "udp://jetson.local:5000" or "rtsp://jetson.local:8554/cam_front"
-    # You then pass that URL into NetworkStreamOptions/NetworkStreamCamera.
-
-The client is synchronous for simplicity. Service calls are short,
-so blocking the UI for ~100 ms is usually tolerable; if needed you
-can move calls into a QThread later without changing this API.
 """
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Tuple
 
-try:
-    import rclpy
-    from rclpy.node import Node
-except ImportError:
-    rclpy = None
-    Node = object
-
-try:
-    # Adjust import paths to your package names if different
-    from multi_cam_streamer.srv import StartCameraStream, StopCameraStream, GetCameraStreamStatus
-except ImportError:
-    StartCameraStream = None
-    StopCameraStream = None
-    GetCameraStreamStatus = None
-
+import subprocess
 
 @dataclass
 class StreamRequestParams:
@@ -45,14 +26,16 @@ class StreamRequestParams:
     bitrate_kbps: int = 2000
     codec: str = "libx264"
     resolution: str = "1280x720"
+    framerate: int = 30
     transport: str = "udp"   # "rtsp" / "udp" / "srt"
+
 
 class RoverStreamClient:
     """
-    Thin wrapper around ROS2 services exposed by MultiCameraStreamNode.
+    Wrapper to call ROS2 services via local subprocess.
 
-    This is intentionally simple: one Node in a background thread with
-    blocking service calls from the GUI thread.
+    This client assumes the 'ros2' command is available in the environment
+    (or via sourced setup scripts) and can communicate with the rover.
     """
 
     _instance_lock = threading.Lock()
@@ -60,140 +43,148 @@ class RoverStreamClient:
 
     @classmethod
     def instance(cls) -> "RoverStreamClient":
-        """Singleton accessor (optional, but convenient)."""
+        """Singleton accessor."""
         with cls._instance_lock:
             if cls._instance is None:
                 cls._instance = cls()
             return cls._instance
 
-    def __init__(self, node_name: str = "gnss_gui_rover_client") -> None:
-        # Check if we have ROS2 and the service definitions
-        if rclpy is None or StartCameraStream is None:
-            # Fallback to offline/mock mode
-            self._mock_mode = True
-            print(f"[{node_name}] ROS2 or service definitions missing. Running in MOCK mode.")
-            return
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
 
-        self._mock_mode = False
-
-        # Ensure ROS2 global context exists
-        if not rclpy.ok():
-            rclpy.init()
-
-        # Create a dedicated Node
-        self._node = rclpy.create_node(node_name)
-
-        # Service clients
-        self._cli_start = self._node.create_client(StartCameraStream, "camera_manager/start_stream")
-        self._cli_stop = self._node.create_client(StopCameraStream, "camera_manager/stop_stream")
-        self._cli_status = self._node.create_client(GetCameraStreamStatus, "camera_manager/get_status")
-
-        # Background spinning thread
-        self._spin_thread = threading.Thread(target=self._spin, daemon=True)
-        self._spin_thread.start()
-
-    # ------------------------------------------------------------------ internals
-
-    def _spin(self) -> None:
-        """Spin the node to process incoming service responses."""
-        if self._mock_mode:
-            while True:
-                time.sleep(1)
-            return
+    def _exec_command(self, cmd: str) -> str:
+        """Execute a command via local subprocess and return stdout."""
+        
+        # Prepare command with sourcing to ensure ROS 2 tools are available.
+        # This attempts to source common locations.
+        setup_cmd = (
+             "source /opt/ros/humble/setup.zsh 2>/dev/null || source /opt/ros/humble/setup.bash 2>/dev/null || true; "
+             "source /Users/egg/miniforge3/etc/profile.d/conda.sh 2>/dev/null && conda activate ros-humble 2>/dev/null || export PATH=/Users/egg/miniforge3/envs/ros-humble/bin:$PATH; " 
+             "source ~/rover_software/install/setup.zsh 2>/dev/null || source ~/rover_software/install/setup.bash 2>/dev/null || "
+             "source /Users/egg/Documents/VSCodeProjects/GNSS-GUI/rover_software/install/setup.zsh 2>/dev/null || true; "
+             "export PATH=$PATH:/usr/local/bin:/usr/bin; "
+        )
+        full_cmd = f"{setup_cmd} {cmd}"
 
         try:
-            rclpy.spin(self._node)
-        except Exception:
-            # In GUI context we don't crash; you can add logging here.
-            pass
-
-    def _call_service(self, client, req, timeout: float = 3.0):
-        """Generic synchronous service call with timeout."""
-        if not client.wait_for_service(timeout_sec=timeout):
-            raise RuntimeError("Service not available")
-
-        future = client.call_async(req)
-
-        # Busy-wait with spin_once; we can't block the global spin() here.
-        elapsed = 0.0
-        step = 0.05
-        while not future.done() and elapsed < timeout:
-            rclpy.spin_once(self._node, timeout_sec=step)
-            elapsed += step
-
-        if not future.done():
-            raise TimeoutError("Service call timed out")
-
-        return future.result()
+            # Run locally via subprocess
+            # print(f"[RoverStreamClient] Executing: {cmd}")
+            result = subprocess.run(
+                full_cmd, 
+                shell=True, 
+                executable='/bin/zsh', # Use zsh for MacOS
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.PIPE,
+                timeout=5.0
+            )
+            out = result.stdout.decode('utf-8', errors='replace')
+            err = result.stderr.decode('utf-8', errors='replace')
+            
+            if result.returncode != 0:
+                print(f"[RoverStreamClient] Command Error: {err}")
+                if not out:
+                    raise RuntimeError(f"Command failed: {err}")
+            
+            return out
+        except Exception as e:
+            print(f"[RoverStreamClient] Execution failed: {e}")
+            raise
 
     # ------------------------------------------------------------------ API
 
-    def start_stream(self, params: StreamRequestParams, timeout: float = 1.0) -> str:
+    def start_stream(self, params: StreamRequestParams, timeout: float = 10.0) -> str:
         """
-        Start the stream for the given camera.
-
-        Returns
-        -------
-        str
-            The stream URL (e.g. "udp://jetson.local:5000" or RTSP URL)
-            to be used with NetworkStreamOptions/NetworkStreamCamera.
+        Start the stream for the given camera via ROS2 service call.
         """
-        if self._mock_mode:
-            # Use 0.0.0.0 to listen on all interfaces (local and network)
-            print(f"[MOCK] start_stream({params.camera_id}) -> udp://0.0.0.0:5000")
-            return "udp://0.0.0.0:5000"
-
-        req = StartCameraStream.Request()
-        req.camera_id = params.camera_id
-        req.codec = params.codec
-        req.resolution = params.resolution
-        req.bitrate_kbps = int(params.bitrate_kbps)
-        req.transport = params.transport
-
-        resp = self._call_service(self._cli_start, req, timeout=timeout)
-        if not getattr(resp, "success", False):
-            raise RuntimeError(f"Failed to start stream: {getattr(resp, 'message', 'unknown error')}")
-        return getattr(resp, "stream_url", "")
-
-    def stop_stream(self, camera_id: str) -> None:
-        """Stop streaming for a given camera."""
-        if self._mock_mode:
-            print(f"[MOCK] stop_stream({camera_id})")
-            return
-
-        req = StopCameraStream.Request()
-        req.camera_id = camera_id
-        resp = self._call_service(self._cli_stop, req)
-        if not getattr(resp, "success", False):
-            # Not fatal for GUI; we just log on caller side
-            raise RuntimeError(getattr(resp, "message", "Failed to stop stream"))
-
-    def get_status(self, camera_id: str):
-        """Return status tuple (known, streaming, url, last_error)."""
-        if self._mock_mode:
-            return (True, False, "", "")
-
-        req = GetCameraStreamStatus.Request()
-        req.camera_id = camera_id
-        resp = self._call_service(self._cli_status, req)
-        return (
-            getattr(resp, "known", False),
-            getattr(resp, "streaming", False),
-            getattr(resp, "stream_url", ""),
-            getattr(resp, "last_error", ""),
+        # Construct ROS2 service call command
+        # Service type: multi_cam_streamer/srv/StartCameraStream
+        yaml_args = (
+            f"{{camera_id: '{params.camera_id}', "
+            f"codec: '{params.codec}', "
+            f"resolution: '{params.resolution}', "
+            f"bitrate_kbps: {params.bitrate_kbps}, "
+            f"framerate: {params.framerate}, "
+            f"transport: '{params.transport}'}}"
         )
+        
+        cmd = f"ros2 service call /camera_manager/start_stream multi_cam_streamer/srv/StartCameraStream \"{yaml_args}\""
+        
+        try:
+            output = self._exec_command(cmd)
+            # Parse output looking for stream_url='...' or stream_url="..."
+            # Example response:
+            # response: 
+            # multi_cam_streamer.srv.StartCameraStream_Response(success=True, message='OK', stream_url='udp://...')
+            
+            # Simple regex to find stream_url
+            match = re.search(r"stream_url=['\"](.*?)['\"]", output)
+            if match:
+                url = match.group(1)
+                if url:
+                    return url
+            
+            # Fallback parsing if formatting differs
+            if "success=True" in output:
+                # If success but regex failed, maybe try to find the url differently 
+                # or it might be empty.
+                # Let's check for simple url pattern
+                url_match = re.search(r"(udp|rtsp|srt)://[^\s'\"]+", output)
+                if url_match:
+                    return url_match.group(0)
+            
+            if "success=False" in output:
+                raise RuntimeError(f"Service returned failure: {output}")
+
+        except Exception as e:
+            print(f"[RoverStreamClient] start_stream failed: {e}")
+            raise RuntimeError(f"Failed to start stream: {e}")
+            
+        return "" # Should hopefully have returned by now if successful
+
+    def restart_stream(self, params: StreamRequestParams, timeout: float = 15.0) -> str:
+        """Stop and then Start the stream with new params."""
+        try:
+            self.stop_stream(params.camera_id)
+            time.sleep(1.0) # Give it a moment to release resources
+        except Exception:
+            pass 
+        return self.start_stream(params, timeout=timeout)
+
+    def stop_stream(self, camera_id: str, timeout: float = 5.0) -> None:
+        """Stop streaming for a given camera."""
+        yaml_args = f"{{camera_id: '{camera_id}'}}"
+        cmd = f"ros2 service call /camera_manager/stop_stream multi_cam_streamer/srv/StopCameraStream \"{yaml_args}\""
+        
+        try:
+            self._exec_command(cmd)
+        except Exception as e:
+            print(f"[RoverStreamClient] stop_stream warning: {e}")
+
+    def get_status(self, camera_id: str) -> Tuple[bool, bool, str, str]:
+        """Return status tuple (known, streaming, url, last_error)."""
+        yaml_args = f"{{camera_id: '{camera_id}'}}"
+        cmd = f"ros2 service call /camera_manager/get_status multi_cam_streamer/srv/GetCameraStreamStatus \"{yaml_args}\""
+        
+        try:
+            output = self._exec_command(cmd)
+            # Parse response components
+            known = "known=True" in output
+            streaming = "streaming=True" in output
+            
+            url = ""
+            u_match = re.search(r"stream_url=['\"](.*?)['\"]", output)
+            if u_match:
+                url = u_match.group(1)
+                
+            last_err = ""
+            e_match = re.search(r"last_error=['\"](.*?)['\"]", output)
+            if e_match:
+                last_err = e_match.group(1)
+                
+            return (known, streaming, url, last_err)
+        except Exception:
+            return (False, False, "", "Connection Error")
 
     def shutdown(self) -> None:
-        """Optional: clean shutdown when GUI exits."""
-        if self._mock_mode:
-            return
-
-        try:
-            self._node.destroy_node()
-        except Exception:
-            pass
-        if rclpy.ok():
-            try:
-                rclpy.shutdown()
-            except Exception:
-                pass
+        """Cleanup resources."""
+        pass

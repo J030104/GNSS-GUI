@@ -25,8 +25,6 @@ from PyQt5.QtWidgets import (
     QLineEdit,
 )
 
-
-
 from ..config import CAMERA_NAMES
 
 class ControlPanel(QWidget):
@@ -47,25 +45,18 @@ class ControlPanel(QWidget):
         layout = QVBoxLayout()
 
         # Camera selection
-        camera_layout = QHBoxLayout()
-        camera_label = QLabel("Camera:")
+        self._camera_layout = QHBoxLayout()
+        self._camera_label = QLabel("Camera:")
         self.camera_combo = QComboBox()
         # Include a Local camera option for the device's default camera.
         # The string value here is presented to users; consumers map it to
         # underlying device names (e.g. 'local' -> local camera).
-        self.camera_combo.addItems([
-            CAMERA_NAMES["LOCAL"],
-            CAMERA_NAMES["DUAL_1"],
-            CAMERA_NAMES["DUAL_2"],
-            CAMERA_NAMES["USB_LEFT"],
-            CAMERA_NAMES["USB_RIGHT"],
-            CAMERA_NAMES["INSTA360"]
-        ])
+        self.camera_combo.addItems(list(CAMERA_NAMES.values()))
         # handle saving/loading when selection changes
         self.camera_combo.currentTextChanged.connect(self._on_camera_changed)
-        camera_layout.addWidget(camera_label)
-        camera_layout.addWidget(self.camera_combo)
-        layout.addLayout(camera_layout)
+        self._camera_layout.addWidget(self._camera_label)
+        self._camera_layout.addWidget(self.camera_combo)
+        layout.addLayout(self._camera_layout)
 
         # Tab widget groups controls for easier navigation
         self.tabs = QTabWidget()
@@ -97,9 +88,7 @@ class ControlPanel(QWidget):
 
         status_layout = QHBoxLayout()
         self.bandwidth_label = QLabel("Bandwidth: -- kbps")
-        self.conn_status_label = QLabel("Connection: Disconnected")
         status_layout.addWidget(self.bandwidth_label)
-        status_layout.addWidget(self.conn_status_label)
         scroll_content_layout.addLayout(status_layout)
 
         # Video controls
@@ -277,13 +266,11 @@ class ControlPanel(QWidget):
         if cam and cam in self.camera_settings:
             self.camera_settings[cam]["Stream"]["bandwidth"] = float(kbps)
 
-    def set_connection_status(self, connected: bool) -> None:
-        self.conn_status_label.setText(
-            "Connection: Connected" if connected else "Connection: Disconnected"
-        )
-        cam = getattr(self, "_current_camera", None)
-        if cam and cam in self.camera_settings:
-            self.camera_settings[cam]["Stream"]["connected"] = bool(connected)
+    def set_camera_prefix_widget(self, widget: QWidget) -> None:
+        """Insert a widget before the Camera label (e.g., map button)."""
+        if widget is None:
+            return
+        self._camera_layout.insertWidget(0, widget)
 
     # --- Helper methods for per-camera settings ---
     def _default_settings(self) -> dict:

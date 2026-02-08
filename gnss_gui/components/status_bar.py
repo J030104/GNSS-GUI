@@ -9,6 +9,8 @@ from typing import Optional
 from PyQt5.QtCore import QTimer, QTime
 from PyQt5.QtWidgets import QStatusBar, QLabel
 
+from .telemetry_panel import TelemetryPanel
+
 
 class StatusBar(QStatusBar):
     """Custom QStatusBar showing time and connection status."""
@@ -19,8 +21,10 @@ class StatusBar(QStatusBar):
         # Create labels
         self._time_label = QLabel()
         self._conn_label = QLabel("Connection: Disconnected")
+        self._telemetry_panel = TelemetryPanel()
 
         # Add widgets to the status bar (aligned right by default)
+        self.addPermanentWidget(self._telemetry_panel)
         self.addPermanentWidget(self._time_label)
         self.addPermanentWidget(self._conn_label)
 
@@ -39,3 +43,16 @@ class StatusBar(QStatusBar):
         """Update the connection status label."""
         text = "Connection: Connected" if connected else "Connection: Disconnected"
         self._conn_label.setText(text)
+
+    def set_telemetry(
+        self,
+        rssi_dbm: Optional[float] = None,
+        latency_ms: Optional[float] = None,
+        battery_pct: Optional[float] = None,
+    ) -> None:
+        """Update the telemetry values displayed in the status bar."""
+        self._telemetry_panel.set_telemetry(
+            rssi_dbm=rssi_dbm,
+            latency_ms=latency_ms,
+            battery_pct=battery_pct,
+        )

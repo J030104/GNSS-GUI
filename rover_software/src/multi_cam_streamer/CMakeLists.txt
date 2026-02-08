@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.8)
+cmake_minimum_required(VERSION 3.12)
 project(multi_cam_streamer)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -18,7 +18,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 
 # Install Python scripts
 install(PROGRAMS
-  scripts/mock_rover_node.py
+  scripts/camera_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

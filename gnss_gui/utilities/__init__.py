@@ -5,7 +5,7 @@ capabilities.  See ``connection_manager.py`` and ``video_streamer.py``
 for more information.
 """
 
-from .connection_manager import ConnectionManager, SSHConfig
+from .connection_manager import ConnectionManager
 from .video_streamer import VideoStreamer
 
-__all__ = ["ConnectionManager", "SSHConfig", "VideoStreamer"]
+__all__ = ["ConnectionManager", "VideoStreamer"]

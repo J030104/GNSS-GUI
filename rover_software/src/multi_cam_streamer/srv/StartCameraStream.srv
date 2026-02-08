@@ -2,6 +2,7 @@ string camera_id
 string codec
 string resolution
 int32 bitrate_kbps
+int32 framerate
 string transport
 ---
 bool success

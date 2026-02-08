@@ -122,6 +122,11 @@ class CameraSource:
     def read_frame(self):
         raise NotImplementedError()
 
+    def get_bandwidth(self) -> float:
+        """Return bandwidth usage in kbps."""
+        return 0.0
+
+
 
 class LocalCamera(CameraSource):
     """Capture from the default local camera using OpenCV.
@@ -188,6 +193,10 @@ class LocalCamera(CameraSource):
         self._stop_event.set()
         if self._thread:
             self._thread.join(timeout=1.0)
+            if self._thread.is_alive():
+                print(f"[LocalCamera] Thread did not exit within timeout. Skipping release() to avoid crash.")
+                self._thread = None
+                return
             self._thread = None
         if self._cap is not None:
             try:
@@ -212,6 +221,11 @@ class VideoSubscriberNode(Node if HAS_ROS else object):
         self.bridge = CvBridge()
         self._lock = threading.Lock()
         
+        # Bandwidth tracking
+        self._bytes_recvd = 0
+        self._last_bw_time = time.time()
+        self._bw_kbps = 0.0
+        
         # QoS Profile: Must match Publisher (Best Effort, Volatile)
         qos_profile = QoSProfile(
             history=QoSHistoryPolicy.KEEP_LAST,
@@ -228,8 +242,32 @@ class VideoSubscriberNode(Node if HAS_ROS else object):
         )
         self.get_logger().info(f"Subscribing to {self.topic}")
 
+    def get_bandwidth(self) -> float:
+        """Return the estimated bandwidth usage in kbps."""
+        with self._lock:
+            self._update_bw_calc()
+            return self._bw_kbps
+
+    def _update_bw_calc(self) -> None:
+        now = time.time()
+        elapsed = now - self._last_bw_time
+        if elapsed >= 1.0:
+            self._bw_kbps = (self._bytes_recvd * 8) / (1000.0 * elapsed)
+            self._bytes_recvd = 0
+            self._last_bw_time = now
+
+    def _record_bytes(self, count: int) -> None:
+        with self._lock:
+            self._bytes_recvd += count
+            self._update_bw_calc()
+
     def listener_callback(self, msg):
         try:
+            # Approximate bandwidth tracking for raw ROS images
+            # (msg.step * msg.height) is the data payload size
+            data_len = len(msg.data)
+            self._record_bytes(data_len)
+
             # Convert ROS Image message to OpenCV image
             # We want RGB for the GUI, but cv_bridge usually returns BGR for "bgr8".
             # If the publisher sends "bgr8", we receive it here.
@@ -289,6 +327,12 @@ class ROSCameraSubscriber(CameraSource):
                  if self.node.latest_frame is not None:
                       return self.node.latest_frame.copy()
         return None
+
+    def get_bandwidth(self) -> float:
+        if self.node:
+            return self.node.get_bandwidth()
+        return 0.0
+
 
 
 @dataclass
@@ -461,6 +505,10 @@ class NetworkStreamCamera(CameraSource):
         self._stop_event.set()
         if self._thread:
             self._thread.join(timeout=1.0)
+            if self._thread.is_alive():
+                print(f"[NetworkStreamCamera] Thread did not exit within timeout. Skipping release() to avoid crash.")
+                self._thread = None
+                return
             self._thread = None
         if self._cap is not None:
             try:
@@ -493,6 +541,14 @@ class CameraManager:
         if not cls._initialized:
             cls._initialize_cameras()
         return cls._registry.get(name)
+
+    @classmethod
+    def get_total_bandwidth(cls) -> float:
+        """Get total bandwidth usage of all registered cameras in kbps."""
+        total = 0.0
+        for cam in cls._registry.values():
+            total += cam.get_bandwidth()
+        return total
 
     @classmethod
     def _detect_local_camera_index(cls) -> int:
@@ -557,15 +613,15 @@ class CameraManager:
                     cls.register("local", cam)  # Register as 'local' for backward compat
                     print(f"[CameraManager] Registered '{cam_name}' as local camera (index {device_index})")
                 
-                elif transport == "ros2":
-                    # ROS2 subscriber
-                    if HAS_ROS:
-                        topic = cfg.get("topic", f"/rover/{cam_key.lower()}")
-                        ros_cam = ROSCameraSubscriber(topic=topic)
-                        cls.register(cam_name, ros_cam)
-                        print(f"[CameraManager] Registered '{cam_name}' as ROS2 subscriber on {topic}")
-                    else:
-                        print(f"[CameraManager] ROS2 not available, skipping '{cam_name}'")
+                # elif transport == "ros2":
+                #     # ROS2 subscriber
+                #     if HAS_ROS:
+                #         topic = cfg.get("topic", f"/rover/{cam_key.lower()}")
+                #         ros_cam = ROSCameraSubscriber(topic=topic)
+                #         cls.register(cam_name, ros_cam)
+                #         print(f"[CameraManager] Registered '{cam_name}' as ROS2 subscriber on {topic}")
+                #     else:
+                #         print(f"[CameraManager] ROS2 not available, skipping '{cam_name}'")
                 
                 elif transport == "udp":
                     # UDP network stream
@@ -707,6 +763,7 @@ class FfplayReceiver:
                 "-strict", "experimental",
                 "-probesize", "32",
                 "-analyzeduration", "0",
+                "-sync", "ext"
             ]
 
         # RTSP transport selection

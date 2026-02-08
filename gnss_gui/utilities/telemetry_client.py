@@ -74,6 +74,11 @@ class TelemetryClient:
         self._latency_ts = 0.0
         self._battery_ts = 0.0
 
+        # Bandwidth tracking
+        self._bytes_received = 0
+        self._last_bw_time = time.time()
+        self._bandwidth_kbps = 0.0
+
         self._topic_rssi = topic_rssi
         self._topic_latency = topic_latency
         self._topic_battery = topic_battery
@@ -87,6 +92,28 @@ class TelemetryClient:
         self._spin_thread = threading.Thread(target=self._spin, daemon=True)
         self._spin_thread.start()
 
+    def get_bandwidth(self) -> float:
+        """Return the current telemetry bandwidth usage in kbps."""
+        with self._lock:
+            # Force an update if idle
+            self._update_bw_calc()
+            return self._bandwidth_kbps
+
+    def _update_bw_calc(self) -> None:
+        """Update the bandwidth calculation based on time elapsed."""
+        now = time.time()
+        elapsed = now - self._last_bw_time
+        if elapsed >= 1.0:
+            # kbps = (bytes * 8) / (1000 * elapsed)
+            self._bandwidth_kbps = (self._bytes_received * 8) / (1000.0 * elapsed)
+            self._bytes_received = 0
+            self._last_bw_time = now
+
+    def _record_bytes(self, count: int) -> None:
+        with self._lock:
+            self._bytes_received += count
+            self._update_bw_calc()
+
     def _spin(self) -> None:
         try:
             rclpy.spin(self._node)
@@ -96,16 +123,19 @@ class TelemetryClient:
 # --- Callbacks for each telemetry topic ---
 
     def _on_rssi(self, msg: Float32) -> None:
+        self._record_bytes(4)
         with self._lock:
             self._rssi_dbm = float(msg.data)
             self._rssi_ts = time.time()
 
     def _on_latency(self, msg: Float32) -> None:
+        self._record_bytes(4)
         with self._lock:
             self._latency_ms = float(msg.data)
             self._latency_ts = time.time()
 
     def _on_battery(self, msg: Float32) -> None:
+        self._record_bytes(4)
         with self._lock:
             self._battery_pct = float(msg.data)
             self._battery_ts = time.time()
