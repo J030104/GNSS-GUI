@@ -1,4 +1,4 @@
-from gnss_gui.components.shell_tabs import ShellTabs
+from gui.components.shell_tabs import ShellTabs
 from PyQt5.QtWidgets import QApplication
 
 app = QApplication([])

@@ -50,7 +50,7 @@ class TelemetryClient:
 
     def __init__(
         self,
-        node_name: str = "gnss_gui_telemetry_client",
+        node_name: str = "gui_telemetry_client",
         topic_rssi: str = DEFAULT_TOPIC_RSSI,
         topic_latency: str = DEFAULT_TOPIC_LATENCY,
         topic_battery: str = DEFAULT_TOPIC_BATTERY,

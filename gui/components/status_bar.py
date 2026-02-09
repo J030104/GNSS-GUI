@@ -11,7 +11,7 @@ from PyQt5.QtWidgets import QStatusBar, QLabel
 
 from .telemetry_panel import TelemetryPanel
 
-
+# TODO: Show actual connection to the rover (implementation needed)
 class StatusBar(QStatusBar):
     """Custom QStatusBar showing time and connection status."""
 

@@ -13,7 +13,7 @@ from typing import Optional
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QMessageBox, QListWidget, QPushButton, QLabel, QSplitter
 
-from ..components import VideoViewer, MapViewer, ControlPanel, LogViewer, ShellTabs
+from ..components import VideoViewer, MapViewer, ControlPanel, LogViewer, ShellTabs, GNSSSidePanel
 from ..components.video_layout_tabs import VideoLayoutTabWidget
 from ..utilities.connection_manager import ConnectionManager
 from ..utilities.video_streamer import VideoStreamer, CameraManager, CameraSource, FfplayReceiver, FfplayOptions, NetworkStreamCamera, NetworkStreamOptions
@@ -22,7 +22,7 @@ from ..utilities.rover_stream_client import RoverStreamClient, StreamRequestPara
 from ..config import CAMERA_NAMES, CAMERA_PORTS, ROVER_CAMERAS, ROVER_IP, get_rover_id_by_name
 
 try:
-    from ..utilities.telemetry_client import TelemetryClient
+    from ..utilities.rover_telemetry_client import TelemetryClient
 except Exception:
     TelemetryClient = None
 
@@ -126,6 +126,7 @@ class GNSSCommWidget(QWidget):
         self.control_panel = ControlPanel()
         self.log_viewer = LogViewer()
         self.shell_tabs = ShellTabs(log_viewer=self.log_viewer)
+        self.gnss_side_panel = GNSSSidePanel(parent=self)
         self._parameter_camera = self.control_panel._current_camera
 
         # Toggle Map Button
@@ -194,6 +195,7 @@ class GNSSCommWidget(QWidget):
         layout.setContentsMargins(1, 1, 1, 1)  # Reduce margins for tighter fit
         layout.addWidget(self.control_panel, stretch=1)
         layout.addWidget(self.shell_tabs, stretch=2)
+        layout.addWidget(self.gnss_side_panel, stretch=1)
         widget.setLayout(layout)
         
         # Set minimum sizes to control collapse behavior
@@ -217,7 +219,8 @@ class GNSSCommWidget(QWidget):
     def _init_timers(self) -> None:
         # Timer to periodically update bandwidth
         self.bandwidth_timer = QTimer(self)
-        self.bandwidth_timer.timeout.connect(self.update_bandwidth)
+        # TODO: Complete bandwidth update logic
+        # self.bandwidth_timer.timeout.connect(self.update_bandwidth)
         self.bandwidth_timer.start(1000)
 
         # Telemetry overlay updates (RSSI/latency/battery)

@@ -165,8 +165,8 @@ sys.modules["multi_cam_streamer.srv"] = mock_srv
 # ------------------------------------------------------------------------------
 # Now we can safely import the project code
 try:
-    from gnss_gui.utilities.rover_stream_client import RoverStreamClient, StreamRequestParams
-    from gnss_gui.utilities.video_streamer import NetworkStreamCamera, NetworkStreamOptions
+    from gui.utilities.rover_stream_client import RoverStreamClient, StreamRequestParams
+    from gui.utilities.video_streamer import NetworkStreamCamera, NetworkStreamOptions
 except ImportError as e:
     print(f"Import Error: {e}")
     sys.exit(1)

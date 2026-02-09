@@ -1,7 +1,7 @@
 
 import sys
 from PyQt5.QtWidgets import QApplication, QMainWindow
-from gnss_gui.components.shell_tabs import ShellTabs
+from gui.components.shell_tabs import ShellTabs
 
 def main():
     app = QApplication(sys.argv)

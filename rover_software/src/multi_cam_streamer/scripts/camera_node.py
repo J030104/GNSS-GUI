@@ -60,7 +60,7 @@ CONFIG = {
     #   - port: UDP port to stream to
     #   - resolution: WxH
     #   - framerate: FPS
-    # NOTE: This should match ROVER_CAMERAS in gnss_gui/config.py
+    # NOTE: This should match ROVER_CAMERAS in gui/config.py
     "CAMERAS": {
         "Left_USB": {
             "enabled": True,

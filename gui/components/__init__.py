@@ -13,11 +13,17 @@ from .status_bar import StatusBar
 from .log_viewer import LogViewer
 from .shell_tabs import ShellTabs
 from .telemetry_panel import TelemetryPanel
+from .gnss_side_panel import GNSSSidePanel
 
 __all__ = [
     "VideoViewer",
     "MapViewer",
     "ControlPanel",
+    "StatusBar",
+    "LogViewer",
+    "ShellTabs",
+    "TelemetryPanel",
+    "GNSSSidePanel",
     "StatusBar",
     "LogViewer",
     "ShellTabs",

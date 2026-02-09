@@ -4,7 +4,7 @@ This module creates the top‑level window, sets up the tabbed
 subsystem interface and runs the Qt event loop.  To launch the
 application simply run:
 
-    python -m gnss_gui.main
+    python -m gui.main
 """
 
 import sys

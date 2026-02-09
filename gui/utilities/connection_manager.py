@@ -13,7 +13,7 @@ from typing import Optional
 # Import other utilities for bandwidth aggregation
 # Use try-except to avoid circular imports if any, or import errors during testing
 try:
-    from .telemetry_client import TelemetryClient
+    from .rover_telemetry_client import TelemetryClient
     from .video_streamer import CameraManager
 except ImportError:
     TelemetryClient = None
