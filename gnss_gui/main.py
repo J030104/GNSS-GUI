@@ -36,11 +36,11 @@ class MainWindow(QMainWindow):
         # Create tab widget for subsystems
         self.tabs = QTabWidget()
         self.tabs.addTab(GNSSCommWidget(), "GNSS & Communication")
-        # self.tabs.addTab(AutonomousNavigationWidget(), "Autonomous Navigation")
-        # self.tabs.addTab(PowerElectronicsWidget(), "Power & Electronics")
-        # self.tabs.addTab(RoboticArmDeliveryWidget(), "Robotic Arm & Delivery")
-        # self.tabs.addTab(ScienceMissionWidget(), "Science Mission")
-        # self.tabs.addTab(DroneWidget(), "Drone")
+        self.tabs.addTab(AutonomousNavigationWidget(), "Autonomous Navigation")
+        self.tabs.addTab(PowerElectronicsWidget(), "Power & Electronics")
+        self.tabs.addTab(RoboticArmDeliveryWidget(), "Robotic Arm & Delivery")
+        self.tabs.addTab(ScienceMissionWidget(), "Science Mission")
+        self.tabs.addTab(DroneWidget(), "Drone")
         self.setCentralWidget(self.tabs)
 
         # Status bar
