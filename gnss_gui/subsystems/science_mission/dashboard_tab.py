@@ -16,7 +16,7 @@ from PyQt5.QtCore import Qt, QTimer
 
 from ...components.video_viewer import VideoViewer
 from ...components.log_viewer import LogViewer
-from ...utilities.video_streamer import LocalCamera
+from ...utilities.video_streamer import LocalCamera, ActiveCameraManager
 
 import os
 
@@ -245,7 +245,7 @@ class DashboardTab(QWidget):
     def _toggle_webcam(self) -> None:
         """Connect or disconnect the webcam for the currently active feed."""
         if self._webcam_source is not None:
-            self._webcam_source.stop()
+            ActiveCameraManager.stop_camera(self._webcam_source)
             self.video_viewer.attach_camera(None)
             self._webcam_source = None
             self._webcam_btn.setText("🎥 Connect Webcam")
@@ -259,7 +259,8 @@ class DashboardTab(QWidget):
             QApplication.processEvents()
             try:
                 cam = LocalCamera(index=self._active_camera_index)
-                cam.start()
+                # Use ActiveCameraManager to stop any other active camera first
+                ActiveCameraManager.start_camera(cam, self.video_viewer)
                 self.video_viewer.attach_camera(cam)
                 self._webcam_source = cam
                 self._webcam_btn.setText("⏹ Disconnect Webcam")
@@ -277,7 +278,7 @@ class DashboardTab(QWidget):
 
         # Stop current camera if running
         if was_streaming:
-            self._webcam_source.stop()
+            ActiveCameraManager.stop_camera(self._webcam_source)
             self.video_viewer.attach_camera(None)
             self._webcam_source = None
 
@@ -302,7 +303,7 @@ class DashboardTab(QWidget):
             QApplication.processEvents()
             try:
                 cam = LocalCamera(index=self._active_camera_index)
-                cam.start()
+                ActiveCameraManager.start_camera(cam, self.video_viewer)
                 self.video_viewer.attach_camera(cam)
                 self._webcam_source = cam
                 self._webcam_btn.setText("⏹ Disconnect Webcam")

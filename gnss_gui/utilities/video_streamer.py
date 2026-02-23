@@ -57,10 +57,20 @@ class LocalCamera(CameraSource):
     frame or ``None`` if no frame is available.
     """
 
-    def __init__(self, index: int = 0, backend: Optional[int] = None) -> None:
+    def __init__(
+        self,
+        index: int = 0,
+        backend: Optional[int] = None,
+        width: int = 1280,
+        height: int = 720,
+        fps: int = 30,
+    ) -> None:
         if cv2 is None:
             raise RuntimeError("OpenCV (cv2) is required for LocalCamera but is not installed")
         self.index = int(index)
+        self._width = width
+        self._height = height
+        self._fps = fps
         self._cv2 = cv2
         # Use DirectShow on Windows by default (avoids MSMF issues)
         import sys
@@ -92,9 +102,9 @@ class LocalCamera(CameraSource):
                 fourcc = self._cv2.VideoWriter_fourcc(*'MJPG')
                 self._cap.set(self._cv2.CAP_PROP_FOURCC, fourcc)
                 # Set resolution and framerate
-                self._cap.set(self._cv2.CAP_PROP_FRAME_WIDTH, 1280)
-                self._cap.set(self._cv2.CAP_PROP_FRAME_HEIGHT, 720)
-                self._cap.set(self._cv2.CAP_PROP_FPS, 30)
+                self._cap.set(self._cv2.CAP_PROP_FRAME_WIDTH, self._width)
+                self._cap.set(self._cv2.CAP_PROP_FRAME_HEIGHT, self._height)
+                self._cap.set(self._cv2.CAP_PROP_FPS, self._fps)
             except Exception:
                 pass
 
@@ -304,6 +314,69 @@ class CameraManager:
     @classmethod
     def get_camera(cls, name: str) -> Optional[CameraSource]:
         return cls._registry.get(name)
+
+
+class ActiveCameraManager:
+    """Singleton manager ensuring only one camera is active at a time.
+
+    When a new camera is started via this manager, any previously active
+    camera is automatically stopped first.
+    """
+
+    _active_camera: Optional[CameraSource] = None
+    _active_viewer = None  # Reference to the VideoViewer using the camera
+    _lock = threading.Lock()
+
+    @classmethod
+    def start_camera(cls, camera: CameraSource, viewer=None) -> None:
+        """Start a camera, stopping any previously active camera first.
+
+        Args:
+            camera: The CameraSource to start
+            viewer: Optional VideoViewer reference for cleanup
+        """
+        with cls._lock:
+            # Stop the previous camera if one is active
+            if cls._active_camera is not None and cls._active_camera is not camera:
+                try:
+                    cls._active_camera.stop()
+                except Exception:
+                    pass
+                # Detach from previous viewer
+                if cls._active_viewer is not None:
+                    try:
+                        cls._active_viewer.attach_camera(None)
+                    except Exception:
+                        pass
+
+            # Start the new camera
+            cls._active_camera = camera
+            cls._active_viewer = viewer
+            camera.start()
+
+    @classmethod
+    def stop_camera(cls, camera: Optional[CameraSource] = None) -> None:
+        """Stop a camera. If camera is None, stops the active camera."""
+        with cls._lock:
+            target = camera if camera is not None else cls._active_camera
+            if target is not None:
+                try:
+                    target.stop()
+                except Exception:
+                    pass
+                if target is cls._active_camera:
+                    cls._active_camera = None
+                    cls._active_viewer = None
+
+    @classmethod
+    def get_active_camera(cls) -> Optional[CameraSource]:
+        """Return the currently active camera, or None."""
+        return cls._active_camera
+
+    @classmethod
+    def is_active(cls, camera: CameraSource) -> bool:
+        """Check if a specific camera is the active one."""
+        return cls._active_camera is camera
 
 
 # Register a default local camera (index 0) if OpenCV is available.

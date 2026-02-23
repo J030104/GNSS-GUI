@@ -16,7 +16,7 @@ from PyQt5.QtCore import Qt
 from ...components.video_viewer import VideoViewer
 from ...components.log_viewer import LogViewer
 from ...components.spectral_plot import SpectralPlotWidget
-from ...utilities.video_streamer import LocalCamera
+from ...utilities.video_streamer import LocalCamera, ActiveCameraManager
 import os
 
 
@@ -150,18 +150,26 @@ class RamanSpectroscopyTab(QWidget):
     def _toggle_camera(self) -> None:
         """Connect or disconnect the Raman camera."""
         if self._camera_source is not None:
-            self._camera_source.stop()
+            ActiveCameraManager.stop_camera(self._camera_source)
             self.video_viewer.attach_camera(None)
             self._camera_source = None
             self._camera_btn.setText("🎥 Connect Raman Camera")
             self.log_viewer.append("Raman camera disconnected")
         else:
+            # Show "Connecting..." feedback
+            self.video_viewer.label.setText(f"Raman Feed ({self.site_name})\nConnecting...")
+            self.video_viewer._show_text_placeholder = True
+            self.video_viewer.label.repaint()
+            from PyQt5.QtWidgets import QApplication
+            QApplication.processEvents()
             try:
-                cam = LocalCamera(index=self.RAMAN_CAMERA_INDEX)
-                cam.start()
+                cam = LocalCamera(index=self.RAMAN_CAMERA_INDEX, width=800, height=600)
+                # Use ActiveCameraManager to stop any other active camera first
+                ActiveCameraManager.start_camera(cam, self.video_viewer)
                 self.video_viewer.attach_camera(cam)
                 self._camera_source = cam
                 self._camera_btn.setText("⏹ Disconnect Raman Camera")
                 self.log_viewer.append(f"Camera {self.RAMAN_CAMERA_INDEX} connected to Raman Feed")
             except Exception as e:
+                self.video_viewer.set_camera_name(f"Raman Feed ({self.site_name})")
                 self.log_viewer.append(f"Failed to connect Raman camera: {e}")
