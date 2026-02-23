@@ -91,10 +91,10 @@ class LocalCamera(CameraSource):
                 # Use MJPEG format - much lower bandwidth than raw YUV
                 fourcc = self._cv2.VideoWriter_fourcc(*'MJPG')
                 self._cap.set(self._cv2.CAP_PROP_FOURCC, fourcc)
-                # Lower resolution and framerate to reduce USB bandwidth
-                self._cap.set(self._cv2.CAP_PROP_FRAME_WIDTH, 320)
-                self._cap.set(self._cv2.CAP_PROP_FRAME_HEIGHT, 240)
-                self._cap.set(self._cv2.CAP_PROP_FPS, 15)
+                # Set resolution and framerate
+                self._cap.set(self._cv2.CAP_PROP_FRAME_WIDTH, 1280)
+                self._cap.set(self._cv2.CAP_PROP_FRAME_HEIGHT, 720)
+                self._cap.set(self._cv2.CAP_PROP_FPS, 30)
             except Exception:
                 pass
 
