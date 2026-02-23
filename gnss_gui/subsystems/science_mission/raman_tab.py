@@ -16,12 +16,17 @@ from PyQt5.QtCore import Qt
 from ...components.video_viewer import VideoViewer
 from ...components.log_viewer import LogViewer
 from ...components.spectral_plot import SpectralPlotWidget
+from ...utilities.video_streamer import LocalCamera
+import os
 
 
 class RamanSpectroscopyTab(QWidget):
+    RAMAN_CAMERA_INDEX = int(os.getenv("RAMAN_CAMERA_INDEX", "0"))
+
     def __init__(self, site_name: str, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.site_name = site_name
+        self._camera_source: Optional[LocalCamera] = None
         self._init_ui()
 
     def _init_ui(self):
@@ -32,13 +37,18 @@ class RamanSpectroscopyTab(QWidget):
         top_row = QHBoxLayout()
         
         # 1. Video Viewer (Left)
-        # Placeholder text: "Raman Feed Unavailable"
+        video_section = QVBoxLayout()
         self.video_viewer = VideoViewer(camera_name=f"Raman Feed ({self.site_name})")
-        # For prototype, force the "Unavailable" message by not attaching a source
-        # But we can set the name to appear in the box
-        self.video_viewer.set_camera_name("Raman Feed\nUnavailable")
         self.video_viewer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        top_row.addWidget(self.video_viewer, stretch=2)
+        video_section.addWidget(self.video_viewer, stretch=1)
+
+        # Camera toggle button
+        self._camera_btn = QPushButton("🎥 Connect Raman Camera")
+        self._camera_btn.setFixedHeight(28)
+        self._camera_btn.clicked.connect(self._toggle_camera)
+        video_section.addWidget(self._camera_btn)
+
+        top_row.addLayout(video_section, stretch=2)
         
         # 2. Spectral Plot (Right)
         # Using our custom widget
@@ -134,5 +144,24 @@ class RamanSpectroscopyTab(QWidget):
         bottom_row.addWidget(log_group, stretch=2) 
         
         main_layout.addLayout(bottom_row, stretch=1)
-        
+
         self.setLayout(main_layout)
+
+    def _toggle_camera(self) -> None:
+        """Connect or disconnect the Raman camera."""
+        if self._camera_source is not None:
+            self._camera_source.stop()
+            self.video_viewer.attach_camera(None)
+            self._camera_source = None
+            self._camera_btn.setText("🎥 Connect Raman Camera")
+            self.log_viewer.append("Raman camera disconnected")
+        else:
+            try:
+                cam = LocalCamera(index=self.RAMAN_CAMERA_INDEX)
+                cam.start()
+                self.video_viewer.attach_camera(cam)
+                self._camera_source = cam
+                self._camera_btn.setText("⏹ Disconnect Raman Camera")
+                self.log_viewer.append(f"Camera {self.RAMAN_CAMERA_INDEX} connected to Raman Feed")
+            except Exception as e:
+                self.log_viewer.append(f"Failed to connect Raman camera: {e}")

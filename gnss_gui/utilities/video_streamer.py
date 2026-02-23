@@ -57,14 +57,19 @@ class LocalCamera(CameraSource):
     frame or ``None`` if no frame is available.
     """
 
-    def __init__(self, index: int = 0) -> None:
+    def __init__(self, index: int = 0, backend: Optional[int] = None) -> None:
         if cv2 is None:
             raise RuntimeError("OpenCV (cv2) is required for LocalCamera but is not installed")
         self.index = int(index)
         self._cv2 = cv2
-        # don't reference cv2 types in annotations (some type checkers
-        # don't like library-specific classes); keep a simple runtime
-        # value instead.
+        # Use DirectShow on Windows by default (avoids MSMF issues)
+        import sys
+        if backend is not None:
+            self._backend = backend
+        elif sys.platform.startswith("win") and hasattr(cv2, "CAP_DSHOW"):
+            self._backend = cv2.CAP_DSHOW
+        else:
+            self._backend = None
         self._cap = None
         self._thread = None
         self._stop_event = threading.Event()
@@ -75,16 +80,24 @@ class LocalCamera(CameraSource):
         if self._thread and self._thread.is_alive():
             return
         self._stop_event.clear()
-        self._cap = self._cv2.VideoCapture(self.index)
-        # Try a few default capture properties for consistency
-        try:
-            self._cap.set(self._cv2.CAP_PROP_FRAME_WIDTH, 640)
-            self._cap.set(self._cv2.CAP_PROP_FRAME_HEIGHT, 480)
-            self._cap.set(self._cv2.CAP_PROP_FPS, 30)
-        except Exception:
-            pass
 
         def _run() -> None:
+            # Open the camera in the background thread to avoid blocking the GUI
+            if self._backend is not None:
+                self._cap = self._cv2.VideoCapture(self.index, self._backend)
+            else:
+                self._cap = self._cv2.VideoCapture(self.index)
+            try:
+                # Use MJPEG format - much lower bandwidth than raw YUV
+                fourcc = self._cv2.VideoWriter_fourcc(*'MJPG')
+                self._cap.set(self._cv2.CAP_PROP_FOURCC, fourcc)
+                # Lower resolution and framerate to reduce USB bandwidth
+                self._cap.set(self._cv2.CAP_PROP_FRAME_WIDTH, 320)
+                self._cap.set(self._cv2.CAP_PROP_FRAME_HEIGHT, 240)
+                self._cap.set(self._cv2.CAP_PROP_FPS, 15)
+            except Exception:
+                pass
+
             while not self._stop_event.is_set():
                 try:
                     if self._cap is None:
