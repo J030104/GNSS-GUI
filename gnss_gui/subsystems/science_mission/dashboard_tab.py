@@ -14,11 +14,12 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QTimer
 
-from ...components.video_viewer import VideoViewer
 from ...components.log_viewer import LogViewer
-from ...utilities.video_streamer import LocalCamera, ActiveCameraManager
+from ...components.video_viewer import VideoViewer
+from ...utilities.video_streamer import StaticImageCamera, VideoFileCamera, ActiveCameraManager
 
 import os
+from pathlib import Path
 
 
 class DashboardTab(QWidget):
@@ -30,12 +31,21 @@ class DashboardTab(QWidget):
     FEED_AUX = "aux"
     FEED_GROUND = "ground"
 
+    # Temporary feed sources
+    GROUND_FEED_VIDEO = str(Path(__file__).resolve().parents[3] / "assets" / "videos" / "ground_feed.mp4")
+    AUX_FEED_IMAGE = str(Path(__file__).resolve().parents[3] / "assets" / "images" / "soil_aux.png")
+
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self._webcam_source: Optional[LocalCamera] = None
+        self._webcam_source = None
         self._active_feed = self.FEED_AUX  # which feed is currently selected
+        self._drill_depth = 11.8  # cm, range 0.0–13.0
+        self._la_direction = 0   # -1 rev, 0 stopped, 1 fwd
         self._init_ui()
         self._start_data_simulation()
+        self._depth_timer = QTimer(self)
+        self._depth_timer.setInterval(500)  # 0.1 cm per tick → 0.2 cm/s
+        self._depth_timer.timeout.connect(self._update_drill_depth)
 
     def _start_data_simulation(self):
         """Start a 1-second timer to simulate live sensor data."""
@@ -43,24 +53,30 @@ class DashboardTab(QWidget):
         self._timer.timeout.connect(self._update_sensor_data)
         self._timer.start(1000)
 
+    def _update_drill_depth(self):
+        """Increment or decrement drill depth while LA is moving."""
+        self._drill_depth += self._la_direction * 0.1
+        self._drill_depth = round(min(13.0, max(0.0, self._drill_depth)), 1)
+        self.drill_depth_label.setText(f"Drill Depth: {self._drill_depth:.1f} cm")
+
     def _update_sensor_data(self):
         """Update atmospheric and soil probe labels with small random fluctuations."""
         def jitter(base, delta):
             return base + random.uniform(-delta, delta)
 
-        # Atmospheric
-        self._atmos_temp_label.setText(f"Temp: {jitter(24.5, 0.3):.1f} °C")
-        self._atmos_pressure_label.setText(f"Pressure: {jitter(1013, 0.5):.1f} hPa")
-        self._atmos_humidity_label.setText(f"Humidity: {jitter(45, 0.5):.1f}%")
+        # Atmospheric (Singapore, tropical, near sea level)
+        self._atmos_temp_label.setText(f"Temp: {jitter(31.8, 0.15):.1f} °C")
+        self._atmos_pressure_label.setText(f"Pressure: {jitter(1009.5, 0.1):.1f} hPa")
+        self._atmos_humidity_label.setText(f"Humidity: {jitter(82.4, 0.3):.1f}%")
 
-        # Soil Probe
-        self._soil_moisture_label.setText(f"Moisture: {jitter(12, 0.2):.1f}%")
-        self._soil_ph_label.setText(f"pH: {jitter(7.2, 0.05):.2f}")
-        self._soil_temp_label.setText(f"Temp: {jitter(18.0, 0.2):.1f} °C")
-        self._soil_conductivity_label.setText(f"Conductivity: {jitter(5790, 10):.0f} µS/cm")
-        self._soil_nitrogen_label.setText(f"Nitrogen: {jitter(2000, 20):.0f} mg/kg")
-        self._soil_phosphorus_label.setText(f"Phosphorus: {jitter(1500, 15):.0f} mg/kg")
-        self._soil_potassium_label.setText(f"Potassium: {jitter(1800, 18):.0f} mg/kg")
+        # Soil Probe (tropical laterite soil)
+        self._soil_moisture_label.setText(f"Moisture: {jitter(38.5, 0.2):.1f}%")
+        self._soil_ph_label.setText(f"pH: {jitter(4.9, 0.02):.2f}")
+        self._soil_temp_label.setText(f"Temp: {jitter(28.6, 0.1):.1f} °C")
+        self._soil_conductivity_label.setText(f"Conductivity: {jitter(246, 3):.0f} µS/cm")
+        self._soil_nitrogen_label.setText(f"Nitrogen: {jitter(143, 2):.0f} mg/kg")
+        self._soil_phosphorus_label.setText(f"Phosphorus: {jitter(31, 1):.0f} mg/kg")
+        self._soil_potassium_label.setText(f"Potassium: {jitter(118, 2):.0f} mg/kg")
 
     def _init_ui(self):
         """Initialize the dashboard layout."""
@@ -102,9 +118,9 @@ class DashboardTab(QWidget):
         # Atmospheric Data
         atmos_group = QGroupBox("Atmospheric Data")
         atmos_inner = QVBoxLayout()
-        self._atmos_temp_label = QLabel("Temp: 24.5 °C")
-        self._atmos_pressure_label = QLabel("Pressure: 1013.0 hPa")
-        self._atmos_humidity_label = QLabel("Humidity: 45.0%")
+        self._atmos_temp_label = QLabel("Temp: 31.8 °C")
+        self._atmos_pressure_label = QLabel("Pressure: 1009.5 hPa")
+        self._atmos_humidity_label = QLabel("Humidity: 82.4%")
         atmos_inner.addWidget(self._atmos_temp_label)
         atmos_inner.addWidget(self._atmos_pressure_label)
         atmos_inner.addWidget(self._atmos_humidity_label)
@@ -114,13 +130,13 @@ class DashboardTab(QWidget):
         # Soil Probe Data
         soil_group = QGroupBox("Soil Probe Data")
         soil_inner = QVBoxLayout()
-        self._soil_moisture_label = QLabel("Moisture: 12.0%")
-        self._soil_ph_label = QLabel("pH: 7.20")
-        self._soil_temp_label = QLabel("Temp: 18.0 °C")
-        self._soil_conductivity_label = QLabel("Conductivity: 5790 µS/cm")
-        self._soil_nitrogen_label = QLabel("Nitrogen: 2000 mg/kg")
-        self._soil_phosphorus_label = QLabel("Phosphorus: 1500 mg/kg")
-        self._soil_potassium_label = QLabel("Potassium: 1800 mg/kg")
+        self._soil_moisture_label = QLabel("Moisture: 38.5%")
+        self._soil_ph_label = QLabel("pH: 4.90")
+        self._soil_temp_label = QLabel("Temp: 28.6 °C")
+        self._soil_conductivity_label = QLabel("Conductivity: 246 µS/cm")
+        self._soil_nitrogen_label = QLabel("Nitrogen: 143 mg/kg")
+        self._soil_phosphorus_label = QLabel("Phosphorus: 31 mg/kg")
+        self._soil_potassium_label = QLabel("Potassium: 118 mg/kg")
         soil_inner.addWidget(self._soil_moisture_label)
         soil_inner.addWidget(self._soil_ph_label)
         soil_inner.addWidget(self._soil_temp_label)
@@ -157,11 +173,13 @@ class DashboardTab(QWidget):
         cache_inner = QHBoxLayout()
         cache_inner.setContentsMargins(5, 5, 5, 5) # Compact margins
         self.cache_open_btn = QPushButton("Open")
+        self.cache_open_btn.clicked.connect(self._on_cache_open)
         self.cache_close_btn = QPushButton("Close")
+        self.cache_close_btn.clicked.connect(self._on_cache_close)
         self.cache_indicator = QLabel()
         self.cache_indicator.setFixedSize(20, 20)
-        self.cache_indicator.setStyleSheet("background-color: #00FF00; border-radius: 10px; border: 1px solid black;")
-        
+        self.cache_indicator.setStyleSheet("background-color: #222222; border-radius: 10px; border: 1px solid black;")
+
         cache_inner.addWidget(self.cache_open_btn)
         cache_inner.addWidget(self.cache_close_btn)
         cache_inner.addWidget(self.cache_indicator)
@@ -176,7 +194,7 @@ class DashboardTab(QWidget):
 
         drill_depth_layout = QVBoxLayout()
         drill_depth_layout.setContentsMargins(2, 2, 2, 2) # Very compact margins
-        self.drill_depth_label = QLabel("Drill Depth: 5.7 cm")
+        self.drill_depth_label = QLabel("Drill Depth: 11.8 cm")
         self.drill_depth_label.setStyleSheet("border: none; font-weight: bold;")
         self.drill_depth_label.setAlignment(Qt.AlignCenter)
         drill_depth_layout.addWidget(self.drill_depth_label)
@@ -191,21 +209,39 @@ class DashboardTab(QWidget):
         manual_layout.setContentsMargins(5, 5, 5, 5) # Compact margins
         manual_layout.setVerticalSpacing(5)
         
+        self._la_rev_btn = QPushButton("REV")
+        self._la_stop_btn = QPushButton("STOP")
+        self._la_fwd_btn = QPushButton("FWD")
+        self._la_active_btn: Optional[QPushButton] = None
+        self._la_rev_btn.clicked.connect(self._on_la_rev)
+        self._la_stop_btn.clicked.connect(self._on_la_stop)
+        self._la_fwd_btn.clicked.connect(self._on_la_fwd)
+
         manual_layout.addWidget(QLabel("Linear Actuator"), 0, 0)
-        manual_layout.addWidget(QPushButton("REV"), 0, 1)
-        manual_layout.addWidget(QPushButton("STOP"), 0, 2)
-        manual_layout.addWidget(QPushButton("FWD"), 0, 3)
+        manual_layout.addWidget(self._la_rev_btn, 0, 1)
+        manual_layout.addWidget(self._la_stop_btn, 0, 2)
+        manual_layout.addWidget(self._la_fwd_btn, 0, 3)
         
+        self._drill_rev_btn = QPushButton("REV")
+        self._drill_stop_btn = QPushButton("STOP")
+        self._drill_fwd_btn = QPushButton("FWD")
+        self._drill_active_btn: Optional[QPushButton] = None
+        self._drill_rev_btn.clicked.connect(self._on_drill_rev)
+        self._drill_stop_btn.clicked.connect(self._on_drill_stop)
+        self._drill_fwd_btn.clicked.connect(self._on_drill_fwd)
+
         manual_layout.addWidget(QLabel("Drill"), 1, 0)
-        manual_layout.addWidget(QPushButton("REV"), 1, 1)
-        manual_layout.addWidget(QPushButton("STOP"), 1, 2)
-        manual_layout.addWidget(QPushButton("FWD"), 1, 3)
+        manual_layout.addWidget(self._drill_rev_btn, 1, 1)
+        manual_layout.addWidget(self._drill_stop_btn, 1, 2)
+        manual_layout.addWidget(self._drill_fwd_btn, 1, 3)
         
         start_drill_btn = QPushButton("Start Drilling")
         start_drill_btn.setStyleSheet("background-color: #90EE90; font-weight: bold;")
+        start_drill_btn.clicked.connect(self._on_start_drilling)
         retract_app_btn = QPushButton("Retract Apparatus")
         retract_app_btn.setStyleSheet("background-color: #F08080; font-weight: bold;")
-        
+        retract_app_btn.clicked.connect(self._on_retract_apparatus)
+
         manual_layout.addWidget(start_drill_btn, 2, 0, 1, 2)
         manual_layout.addWidget(retract_app_btn, 2, 2, 1, 2)
         
@@ -242,6 +278,23 @@ class DashboardTab(QWidget):
             return "Ground Feed"
         return "Aux Probe Feed"
 
+    def _do_connect(self) -> None:
+        """Actually instantiate and start the camera for the active feed."""
+        try:
+            if self._active_feed == self.FEED_GROUND:
+                cam = VideoFileCamera(path=self.GROUND_FEED_VIDEO)
+            else:
+                import cv2 as _cv2
+                cam = StaticImageCamera(path=self.AUX_FEED_IMAGE, rotate=_cv2.ROTATE_90_CLOCKWISE)
+            ActiveCameraManager.start_camera(cam, self.video_viewer)
+            self.video_viewer.attach_camera(cam)
+            self._webcam_source = cam
+            self._webcam_btn.setText("⏹ Disconnect Webcam")
+            self.log_viewer.append(f"Connected to {self._active_feed_name}")
+        except Exception as e:
+            self._webcam_btn.setText("🎥 Connect Webcam")
+            self.log_viewer.append(f"Failed to connect: {e}")
+
     def _toggle_webcam(self) -> None:
         """Connect or disconnect the webcam for the currently active feed."""
         if self._webcam_source is not None:
@@ -249,28 +302,17 @@ class DashboardTab(QWidget):
             self.video_viewer.attach_camera(None)
             self._webcam_source = None
             self._webcam_btn.setText("🎥 Connect Webcam")
-            self.log_viewer.append(f"Webcam disconnected from {self._active_feed_name}")
+            self.log_viewer.append(f"Disconnected from {self._active_feed_name}")
         else:
-            # Show "Connecting..." on the video viewer area
-            self.video_viewer.label.setText(f"{self._active_feed_name}\nConnecting...")
-            self.video_viewer._show_text_placeholder = True
-            self.video_viewer.label.repaint()
-            from PyQt5.QtWidgets import QApplication
-            QApplication.processEvents()
-            try:
-                cam = LocalCamera(index=self._active_camera_index)
-                # Use ActiveCameraManager to stop any other active camera first
-                ActiveCameraManager.start_camera(cam, self.video_viewer)
-                self.video_viewer.attach_camera(cam)
-                self._webcam_source = cam
-                self._webcam_btn.setText("⏹ Disconnect Webcam")
-                self.log_viewer.append(
-                    f"Camera {self._active_camera_index} connected to {self._active_feed_name}"
-                )
-            except Exception as e:
-                self._webcam_btn.setText("🎥 Connect Webcam")
-                self.video_viewer.set_camera_name(self._active_feed_name)
-                self.log_viewer.append(f"Failed to connect webcam: {e}")
+            self._webcam_btn.setEnabled(False)
+            self.log_viewer.append(f"Connecting to {self._active_feed_name}...")
+            self.video_viewer._show_text_placeholder_message(f"{self._active_feed_name}\nConnecting...")
+            QTimer.singleShot(2000, self._on_connect_delay)
+
+    def _on_connect_delay(self) -> None:
+        """Called after the 2-second connection delay."""
+        self._webcam_btn.setEnabled(True)
+        self._do_connect()
 
     def _switch_feed(self) -> None:
         """Switch the viewer between Aux Probe Feed and Ground Feed."""
@@ -290,29 +332,152 @@ class DashboardTab(QWidget):
             self._active_feed = self.FEED_AUX
             self._switch_feed_btn.setText("🔄 Switch to Ground Feed")
 
-        # Update the viewer title
         self.video_viewer.set_camera_name(self._active_feed_name)
         self.log_viewer.append(f"Switched to {self._active_feed_name}")
 
         # Reconnect on the new camera if we were streaming
         if was_streaming:
-            self.video_viewer.label.setText(f"{self._active_feed_name}\nConnecting...")
-            self.video_viewer._show_text_placeholder = True
-            self.video_viewer.label.repaint()
-            from PyQt5.QtWidgets import QApplication
-            QApplication.processEvents()
-            try:
-                cam = LocalCamera(index=self._active_camera_index)
-                ActiveCameraManager.start_camera(cam, self.video_viewer)
-                self.video_viewer.attach_camera(cam)
-                self._webcam_source = cam
-                self._webcam_btn.setText("⏹ Disconnect Webcam")
-                self.log_viewer.append(
-                    f"Camera {self._active_camera_index} connected to {self._active_feed_name}"
-                )
-            except Exception as e:
-                self._webcam_btn.setText("🎥 Connect Webcam")
-                self.log_viewer.append(f"Failed to connect webcam: {e}")
+            self._webcam_btn.setEnabled(False)
+            self.log_viewer.append(f"Connecting to {self._active_feed_name}...")
+            self.video_viewer._show_text_placeholder_message(f"{self._active_feed_name}\nConnecting...")
+            QTimer.singleShot(2000, self._on_connect_delay)
         else:
             self._webcam_btn.setText("🎥 Connect Webcam")
 
+    _BTN_PRESSED_STYLE = (
+        "border-radius: 4px;"
+        "border-top: 2px solid #777;"
+        "border-left: 2px solid #777;"
+        "border-bottom: 2px solid #d0d0d0;"
+        "border-right: 2px solid #d0d0d0;"
+        "background-color: #a8a8a8;"
+        "color: #222;"
+        "padding-top: 3px;"
+        "padding-left: 3px;"
+    )
+
+    def _press_button_briefly(self, btn: QPushButton, on_release=None) -> None:
+        """Indent a button for 1 second, then restore and fire on_release."""
+        btn.setStyleSheet(self._BTN_PRESSED_STYLE)
+        btn.setEnabled(False)
+
+        def _restore():
+            btn.setStyleSheet("")
+            btn.setEnabled(True)
+            if on_release:
+                on_release()
+
+        QTimer.singleShot(1000, _restore)
+
+    def _on_cache_open(self) -> None:
+        self.log_viewer.append("Cache open command sent")
+
+        def _on_release():
+            self.cache_indicator.setStyleSheet(
+                "background-color: #222222; border-radius: 10px; border: 1px solid black;"
+            )
+            self.log_viewer.append("Cache door opened")
+
+        self._press_button_briefly(self.cache_open_btn, on_release=_on_release)
+
+    def _on_cache_close(self) -> None:
+        self.log_viewer.append("Cache close command sent")
+
+        def _on_release():
+            self.cache_indicator.setStyleSheet(
+                "background-color: #00FF00; border-radius: 10px; border: 1px solid black;"
+            )
+            self.log_viewer.append("Cache door closed")
+
+        self._press_button_briefly(self.cache_close_btn, on_release=_on_release)
+
+    _LA_ACTIVE_STYLE = (
+        "background-color: #3a8ee6;"
+        "color: white;"
+        "font-weight: bold;"
+        "border-radius: 4px;"
+        "border: 1px solid #1a6ec4;"
+    )
+
+    def _la_set_active(self, btn: Optional[QPushButton]) -> None:
+        """Highlight btn as the active direction; clear the previous one."""
+        if self._la_active_btn is not None:
+            self._la_active_btn.setStyleSheet("")
+        self._la_active_btn = btn
+        if btn is not None:
+            btn.setStyleSheet(self._LA_ACTIVE_STYLE)
+
+    def _on_la_rev(self) -> None:
+        self.log_viewer.append("Linear actuator reverse command sent")
+
+        def _on_release():
+            self._la_set_active(self._la_rev_btn)
+            self._la_direction = -1
+            self._depth_timer.start()
+            self.log_viewer.append("Linear actuator reversing")
+
+        self._press_button_briefly(self._la_rev_btn, on_release=_on_release)
+
+    def _on_la_stop(self) -> None:
+        self.log_viewer.append("Linear actuator stop command sent")
+
+        def _on_release():
+            self._la_set_active(None)
+            self._la_direction = 0
+            self._depth_timer.stop()
+            self.log_viewer.append("Linear actuator stopped")
+
+        self._press_button_briefly(self._la_stop_btn, on_release=_on_release)
+
+    def _on_la_fwd(self) -> None:
+        self.log_viewer.append("Linear actuator forward command sent")
+
+        def _on_release():
+            self._la_set_active(self._la_fwd_btn)
+            self._la_direction = 1
+            self._depth_timer.start()
+            self.log_viewer.append("Linear actuator moving forward")
+
+        self._press_button_briefly(self._la_fwd_btn, on_release=_on_release)
+
+    def _drill_set_active(self, btn: Optional[QPushButton]) -> None:
+        if self._drill_active_btn is not None:
+            self._drill_active_btn.setStyleSheet("")
+        self._drill_active_btn = btn
+        if btn is not None:
+            btn.setStyleSheet(self._LA_ACTIVE_STYLE)
+
+    def _on_drill_rev(self) -> None:
+        self.log_viewer.append("Drill reverse command sent")
+
+        def _on_release():
+            self._drill_set_active(self._drill_rev_btn)
+            self.log_viewer.append("Drill reversing")
+
+        self._press_button_briefly(self._drill_rev_btn, on_release=_on_release)
+
+    def _on_drill_stop(self) -> None:
+        self.log_viewer.append("Drill stop command sent")
+
+        def _on_release():
+            self._drill_set_active(None)
+            self.log_viewer.append("Drill stopped")
+
+        self._press_button_briefly(self._drill_stop_btn, on_release=_on_release)
+
+    def _on_drill_fwd(self) -> None:
+        self.log_viewer.append("Drill forward command sent")
+
+        def _on_release():
+            self._drill_set_active(self._drill_fwd_btn)
+            self.log_viewer.append("Drill moving forward")
+
+        self._press_button_briefly(self._drill_fwd_btn, on_release=_on_release)
+
+    def _on_start_drilling(self) -> None:
+        self._on_la_fwd()
+        self._on_drill_fwd()
+
+    def _on_retract_apparatus(self) -> None:
+        self._on_la_rev()
+        self._on_drill_rev()

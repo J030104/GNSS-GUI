@@ -1,4 +1,5 @@
 from typing import Optional
+from pathlib import Path
 
 from PyQt5.QtWidgets import (
     QWidget,
@@ -11,22 +12,22 @@ from PyQt5.QtWidgets import (
     QSizePolicy,
     QFrame,
 )
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
 
 from ...components.video_viewer import VideoViewer
 from ...components.log_viewer import LogViewer
 from ...components.spectral_plot import SpectralPlotWidget
-from ...utilities.video_streamer import LocalCamera, ActiveCameraManager
-import os
+from ...utilities.video_streamer import VideoFileCamera, ActiveCameraManager
 
 
 class RamanSpectroscopyTab(QWidget):
-    RAMAN_CAMERA_INDEX = int(os.getenv("RAMAN_CAMERA_INDEX", "0"))
+    # Temporary Raman spectroscopy video file
+    RAMAN_FEED_VIDEO = str(Path(__file__).resolve().parents[3] / "assets" / "videos" / "raman_spec.mp4")
 
     def __init__(self, site_name: str, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.site_name = site_name
-        self._camera_source: Optional[LocalCamera] = None
+        self._camera_source: Optional[VideoFileCamera] = None
         self._init_ui()
 
     def _init_ui(self):
@@ -77,14 +78,14 @@ class RamanSpectroscopyTab(QWidget):
         
         self.btn_laser_on = QPushButton("On")
         self.btn_laser_on.setFixedWidth(40)
+        self.btn_laser_on.clicked.connect(self._on_laser_on)
         self.btn_laser_off = QPushButton("Off")
         self.btn_laser_off.setFixedWidth(40)
-        
+        self.btn_laser_off.clicked.connect(self._on_laser_off)
+
         self.laser_indicator = QLabel()
         self.laser_indicator.setFixedSize(25, 25)
-        # Default off (grey or black border? Screenshot has green circle which implies ON or Ready? 
-        # Making it green for visual match, or grey if off. Let's make it Green to match screenshot style)
-        self.laser_indicator.setStyleSheet("background-color: #00FF00; border-radius: 12px; border: 1px solid black;")
+        self.laser_indicator.setStyleSheet("background-color: #222222; border-radius: 12px; border: 1px solid black;")
 
         laser_layout.addWidget(self.btn_laser_on)
         laser_layout.addWidget(self.btn_laser_off)
@@ -99,10 +100,16 @@ class RamanSpectroscopyTab(QWidget):
         power_layout = QVBoxLayout()
         power_layout.setAlignment(Qt.AlignCenter)
         # Smaller font for Power Meter to be more compact
-        power_lbl = QLabel("Power Meter:   67%")
-        power_lbl.setStyleSheet("border: none; font-weight: bold; font-size: 10pt;")
-        power_layout.addWidget(power_lbl)
+        self._power_lbl = QLabel("Power Meter:   0%")
+        self._power_lbl.setStyleSheet("border: none; font-weight: bold; font-size: 10pt;")
+        power_layout.addWidget(self._power_lbl)
         power_group.setLayout(power_layout)
+
+        self._power_value = 0
+        self._power_direction = 0  # 1 = going up, -1 = going down
+        self._power_timer = QTimer(self)
+        self._power_timer.setInterval(8)  # 100 steps × 8 ms = 0.8 s
+        self._power_timer.timeout.connect(self._update_power_meter)
         # Fix height to prevent it from squashing buttons
         power_group.setFixedHeight(60) 
         laser_power_row.addWidget(power_group)
@@ -156,20 +163,77 @@ class RamanSpectroscopyTab(QWidget):
             self._camera_btn.setText("🎥 Connect Raman Camera")
             self.log_viewer.append("Raman camera disconnected")
         else:
-            # Show "Connecting..." feedback
-            self.video_viewer.label.setText(f"Raman Feed ({self.site_name})\nConnecting...")
-            self.video_viewer._show_text_placeholder = True
-            self.video_viewer.label.repaint()
-            from PyQt5.QtWidgets import QApplication
-            QApplication.processEvents()
-            try:
-                cam = LocalCamera(index=self.RAMAN_CAMERA_INDEX, width=800, height=600)
-                # Use ActiveCameraManager to stop any other active camera first
-                ActiveCameraManager.start_camera(cam, self.video_viewer)
-                self.video_viewer.attach_camera(cam)
-                self._camera_source = cam
-                self._camera_btn.setText("⏹ Disconnect Raman Camera")
-                self.log_viewer.append(f"Camera {self.RAMAN_CAMERA_INDEX} connected to Raman Feed")
-            except Exception as e:
-                self.video_viewer.set_camera_name(f"Raman Feed ({self.site_name})")
-                self.log_viewer.append(f"Failed to connect Raman camera: {e}")
+            self._camera_btn.setEnabled(False)
+            self.log_viewer.append("Connecting to Raman camera...")
+            self.video_viewer._show_text_placeholder_message(f"Raman Feed ({self.site_name})\nConnecting...")
+            QTimer.singleShot(2000, self._on_connect_delay)
+
+    def _on_connect_delay(self) -> None:
+        """Called after the 2-second connection delay."""
+        self._camera_btn.setEnabled(True)
+        try:
+            cam = VideoFileCamera(path=self.RAMAN_FEED_VIDEO)
+            ActiveCameraManager.start_camera(cam, self.video_viewer)
+            self.video_viewer.attach_camera(cam)
+            self._camera_source = cam
+            self._camera_btn.setText("⏹ Disconnect Raman Camera")
+            self.log_viewer.append("Connected to Raman camera")
+        except Exception as e:
+            self.video_viewer.set_camera_name(f"Raman Feed ({self.site_name})")
+            self.log_viewer.append(f"Failed to connect Raman camera: {e}")
+
+    _IND_ON  = "background-color: #00FF00; border-radius: 12px; border: 1px solid black;"
+    _IND_OFF = "background-color: #222222; border-radius: 12px; border: 1px solid black;"
+    _BTN_PRESSED_STYLE = (
+        "border-radius: 4px;"
+        "border-top: 2px solid #777;"
+        "border-left: 2px solid #777;"
+        "border-bottom: 2px solid #d0d0d0;"
+        "border-right: 2px solid #d0d0d0;"
+        "background-color: #a8a8a8;"
+        "color: #222;"
+        "padding-top: 3px;"
+        "padding-left: 3px;"
+    )
+
+    def _press_button_briefly(self, btn, on_release=None) -> None:
+        btn.setStyleSheet(self._BTN_PRESSED_STYLE)
+        btn.setEnabled(False)
+
+        def _restore():
+            btn.setStyleSheet("")
+            btn.setEnabled(True)
+            if on_release:
+                on_release()
+
+        QTimer.singleShot(1000, _restore)
+
+    def _on_laser_on(self) -> None:
+        self.log_viewer.append("532nm laser on command sent")
+
+        def _on_release():
+            self.laser_indicator.setStyleSheet(self._IND_ON)
+            self.log_viewer.append("532nm laser on")
+            self._power_value = 0
+            self._power_direction = 1
+            self._power_timer.start()
+
+        self._press_button_briefly(self.btn_laser_on, on_release=_on_release)
+
+    def _on_laser_off(self) -> None:
+        self.log_viewer.append("532nm laser off command sent")
+
+        def _on_release():
+            self.laser_indicator.setStyleSheet(self._IND_OFF)
+            self.log_viewer.append("532nm laser off")
+            self._power_direction = -1
+            self._power_timer.start()
+
+        self._press_button_briefly(self.btn_laser_off, on_release=_on_release)
+
+    def _update_power_meter(self) -> None:
+        self._power_value += self._power_direction
+        self._power_value = max(0, min(100, self._power_value))
+        self._power_lbl.setText(f"Power Meter:   {self._power_value}%")
+        if self._power_value >= 100 or self._power_value <= 0:
+            self._power_timer.stop()

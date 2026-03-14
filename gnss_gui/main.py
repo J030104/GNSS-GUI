@@ -23,6 +23,8 @@ if _env_path.is_file():
                 os.environ.setdefault(_key.strip(), _val.strip())
 
 from PyQt5.QtWidgets import QApplication, QMainWindow, QTabWidget
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QFont
 
 from .components import StatusBar
 from .subsystems import (
@@ -41,9 +43,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("URC Rover Control GUI")
         self.resize(1200, 800)
         
-        # Set reasonable size constraints to prevent window from growing too large
+        # Set minimum size constraint
         self.setMinimumSize(800, 600)
-        self.setMaximumSize(1920, 1080)
 
         # Create tab widget for subsystems
         self.tabs = QTabWidget()
@@ -66,9 +67,12 @@ class MainWindow(QMainWindow):
 
 
 def main() -> None:
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling)
+    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps)
     app = QApplication(sys.argv)
+    app.setFont(QFont("Segoe UI", 11))
     window = MainWindow()
-    window.show()
+    window.showMaximized()
     sys.exit(app.exec_())
 
 

@@ -216,12 +216,11 @@ class NetworkStreamCamera(CameraSource):
                 return f"{base}{sep}{'&'.join(q)}"
             return base
         if proto == "udp":
-            # Basic UDP URL
-            base = f"udp://{o.host}:{int(o.port)}"
-            if q:
-                sep = '&' if '?' in base else '?'
-                return f"{base}{sep}{'&'.join(q)}"
-            return base
+            # UDP receive: listen on local port (sender pushes to us)
+            # Format: udp://@:port?overrun_nonfatal=1&fifo_size=50000000
+            # overrun_nonfatal prevents crash on buffer overrun
+            # fifo_size increases receive buffer for smoother playback
+            return f"udp://@:{int(o.port)}?overrun_nonfatal=1&fifo_size=50000000"
         if proto == "srt":
             # SRT URL (support depends on build)
             base = f"srt://{o.host}:{int(o.port)}"
@@ -229,6 +228,9 @@ class NetworkStreamCamera(CameraSource):
                 sep = '&' if '?' in base else '?'
                 return f"{base}{sep}{'&'.join(q)}"
             return base
+        if proto == "tcp":
+            # Raw TCP stream (e.g., rpicam-vid --listen)
+            return f"tcp://{o.host}:{int(o.port)}"
         # Fallback: assume options.host is raw URL
         return proto
 
@@ -236,17 +238,18 @@ class NetworkStreamCamera(CameraSource):
         if self._thread and self._thread.is_alive():
             return
         self._stop_event.clear()
-        url = self._build_url()
-        # OpenCV with FFMPEG backend should be default on pip wheels
-        self._cap = self._cv2.VideoCapture(url)
-        try:
-            # Reduce internal buffering to lower latency
-            if hasattr(self._cv2, 'CAP_PROP_BUFFERSIZE'):
-                self._cap.set(self._cv2.CAP_PROP_BUFFERSIZE, max(1, int(self.options.buffer_size)))
-        except Exception:
-            pass
 
         def _run() -> None:
+            # Open capture in background thread to avoid blocking GUI
+            url = self._build_url()
+            self._cap = self._cv2.VideoCapture(url)
+            try:
+                # Reduce internal buffering to lower latency
+                if hasattr(self._cv2, 'CAP_PROP_BUFFERSIZE'):
+                    self._cap.set(self._cv2.CAP_PROP_BUFFERSIZE, max(1, int(self.options.buffer_size)))
+            except Exception:
+                pass
+
             no_frame_strikes = 0
             while not self._stop_event.is_set():
                 try:
@@ -294,6 +297,81 @@ class NetworkStreamCamera(CameraSource):
             except Exception:
                 pass
             self._cap = None
+        with self._lock:
+            self._frame = None
+
+
+class StaticImageCamera(CameraSource):
+    """Display a single static image as a camera source."""
+
+    def __init__(self, path: str, rotate: Optional[int] = None) -> None:
+        if cv2 is None:
+            raise RuntimeError("OpenCV (cv2) is required for StaticImageCamera but is not installed")
+        self._path = path
+        self._rotate = rotate  # cv2.ROTATE_* constant or None
+        self._frame = None
+
+    def start(self) -> None:
+        img = cv2.imread(self._path)
+        if img is not None:
+            if self._rotate is not None:
+                img = cv2.rotate(img, self._rotate)
+            self._frame = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+    def read_frame(self):
+        return self._frame.copy() if self._frame is not None else None
+
+    def stop(self) -> None:
+        self._frame = None
+
+
+class VideoFileCamera(CameraSource):
+    """Play back a video file as a camera source, looping continuously."""
+
+    def __init__(self, path: str, fps: int = 30) -> None:
+        if cv2 is None:
+            raise RuntimeError("OpenCV (cv2) is required for VideoFileCamera but is not installed")
+        self._path = path
+        self._fps = fps
+        self._cap = None
+        self._thread = None
+        self._stop_event = threading.Event()
+        self._lock = threading.Lock()
+        self._frame = None
+
+    def start(self) -> None:
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop_event.clear()
+
+        def _run() -> None:
+            self._cap = cv2.VideoCapture(self._path)
+            delay = 1.0 / max(1, self._fps)
+            while not self._stop_event.is_set():
+                ok, frame = self._cap.read()
+                if not ok:
+                    # Loop: rewind to start
+                    self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    continue
+                with self._lock:
+                    self._frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                time.sleep(delay)
+            if self._cap is not None:
+                self._cap.release()
+                self._cap = None
+
+        self._thread = threading.Thread(target=_run, daemon=True)
+        self._thread.start()
+
+    def read_frame(self):
+        with self._lock:
+            return self._frame.copy() if self._frame is not None else None
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join(timeout=1.0)
+            self._thread = None
         with self._lock:
             self._frame = None
 
