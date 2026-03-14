@@ -57,14 +57,29 @@ class LocalCamera(CameraSource):
     frame or ``None`` if no frame is available.
     """
 
-    def __init__(self, index: int = 0) -> None:
+    def __init__(
+        self,
+        index: int = 0,
+        backend: Optional[int] = None,
+        width: int = 1280,
+        height: int = 720,
+        fps: int = 30,
+    ) -> None:
         if cv2 is None:
             raise RuntimeError("OpenCV (cv2) is required for LocalCamera but is not installed")
         self.index = int(index)
+        self._width = width
+        self._height = height
+        self._fps = fps
         self._cv2 = cv2
-        # don't reference cv2 types in annotations (some type checkers
-        # don't like library-specific classes); keep a simple runtime
-        # value instead.
+        # Use DirectShow on Windows by default (avoids MSMF issues)
+        import sys
+        if backend is not None:
+            self._backend = backend
+        elif sys.platform.startswith("win") and hasattr(cv2, "CAP_DSHOW"):
+            self._backend = cv2.CAP_DSHOW
+        else:
+            self._backend = None
         self._cap = None
         self._thread = None
         self._stop_event = threading.Event()
@@ -75,16 +90,24 @@ class LocalCamera(CameraSource):
         if self._thread and self._thread.is_alive():
             return
         self._stop_event.clear()
-        self._cap = self._cv2.VideoCapture(self.index)
-        # Try a few default capture properties for consistency
-        try:
-            self._cap.set(self._cv2.CAP_PROP_FRAME_WIDTH, 640)
-            self._cap.set(self._cv2.CAP_PROP_FRAME_HEIGHT, 480)
-            self._cap.set(self._cv2.CAP_PROP_FPS, 30)
-        except Exception:
-            pass
 
         def _run() -> None:
+            # Open the camera in the background thread to avoid blocking the GUI
+            if self._backend is not None:
+                self._cap = self._cv2.VideoCapture(self.index, self._backend)
+            else:
+                self._cap = self._cv2.VideoCapture(self.index)
+            try:
+                # Use MJPEG format - much lower bandwidth than raw YUV
+                fourcc = self._cv2.VideoWriter_fourcc(*'MJPG')
+                self._cap.set(self._cv2.CAP_PROP_FOURCC, fourcc)
+                # Set resolution and framerate
+                self._cap.set(self._cv2.CAP_PROP_FRAME_WIDTH, self._width)
+                self._cap.set(self._cv2.CAP_PROP_FRAME_HEIGHT, self._height)
+                self._cap.set(self._cv2.CAP_PROP_FPS, self._fps)
+            except Exception:
+                pass
+
             while not self._stop_event.is_set():
                 try:
                     if self._cap is None:
@@ -193,12 +216,11 @@ class NetworkStreamCamera(CameraSource):
                 return f"{base}{sep}{'&'.join(q)}"
             return base
         if proto == "udp":
-            # Basic UDP URL
-            base = f"udp://{o.host}:{int(o.port)}"
-            if q:
-                sep = '&' if '?' in base else '?'
-                return f"{base}{sep}{'&'.join(q)}"
-            return base
+            # UDP receive: listen on local port (sender pushes to us)
+            # Format: udp://@:port?overrun_nonfatal=1&fifo_size=50000000
+            # overrun_nonfatal prevents crash on buffer overrun
+            # fifo_size increases receive buffer for smoother playback
+            return f"udp://@:{int(o.port)}?overrun_nonfatal=1&fifo_size=50000000"
         if proto == "srt":
             # SRT URL (support depends on build)
             base = f"srt://{o.host}:{int(o.port)}"
@@ -206,6 +228,9 @@ class NetworkStreamCamera(CameraSource):
                 sep = '&' if '?' in base else '?'
                 return f"{base}{sep}{'&'.join(q)}"
             return base
+        if proto == "tcp":
+            # Raw TCP stream (e.g., rpicam-vid --listen)
+            return f"tcp://{o.host}:{int(o.port)}"
         # Fallback: assume options.host is raw URL
         return proto
 
@@ -213,17 +238,18 @@ class NetworkStreamCamera(CameraSource):
         if self._thread and self._thread.is_alive():
             return
         self._stop_event.clear()
-        url = self._build_url()
-        # OpenCV with FFMPEG backend should be default on pip wheels
-        self._cap = self._cv2.VideoCapture(url)
-        try:
-            # Reduce internal buffering to lower latency
-            if hasattr(self._cv2, 'CAP_PROP_BUFFERSIZE'):
-                self._cap.set(self._cv2.CAP_PROP_BUFFERSIZE, max(1, int(self.options.buffer_size)))
-        except Exception:
-            pass
 
         def _run() -> None:
+            # Open capture in background thread to avoid blocking GUI
+            url = self._build_url()
+            self._cap = self._cv2.VideoCapture(url)
+            try:
+                # Reduce internal buffering to lower latency
+                if hasattr(self._cv2, 'CAP_PROP_BUFFERSIZE'):
+                    self._cap.set(self._cv2.CAP_PROP_BUFFERSIZE, max(1, int(self.options.buffer_size)))
+            except Exception:
+                pass
+
             no_frame_strikes = 0
             while not self._stop_event.is_set():
                 try:
@@ -275,6 +301,81 @@ class NetworkStreamCamera(CameraSource):
             self._frame = None
 
 
+class StaticImageCamera(CameraSource):
+    """Display a single static image as a camera source."""
+
+    def __init__(self, path: str, rotate: Optional[int] = None) -> None:
+        if cv2 is None:
+            raise RuntimeError("OpenCV (cv2) is required for StaticImageCamera but is not installed")
+        self._path = path
+        self._rotate = rotate  # cv2.ROTATE_* constant or None
+        self._frame = None
+
+    def start(self) -> None:
+        img = cv2.imread(self._path)
+        if img is not None:
+            if self._rotate is not None:
+                img = cv2.rotate(img, self._rotate)
+            self._frame = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+    def read_frame(self):
+        return self._frame.copy() if self._frame is not None else None
+
+    def stop(self) -> None:
+        self._frame = None
+
+
+class VideoFileCamera(CameraSource):
+    """Play back a video file as a camera source, looping continuously."""
+
+    def __init__(self, path: str, fps: int = 30) -> None:
+        if cv2 is None:
+            raise RuntimeError("OpenCV (cv2) is required for VideoFileCamera but is not installed")
+        self._path = path
+        self._fps = fps
+        self._cap = None
+        self._thread = None
+        self._stop_event = threading.Event()
+        self._lock = threading.Lock()
+        self._frame = None
+
+    def start(self) -> None:
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop_event.clear()
+
+        def _run() -> None:
+            self._cap = cv2.VideoCapture(self._path)
+            delay = 1.0 / max(1, self._fps)
+            while not self._stop_event.is_set():
+                ok, frame = self._cap.read()
+                if not ok:
+                    # Loop: rewind to start
+                    self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    continue
+                with self._lock:
+                    self._frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                time.sleep(delay)
+            if self._cap is not None:
+                self._cap.release()
+                self._cap = None
+
+        self._thread = threading.Thread(target=_run, daemon=True)
+        self._thread.start()
+
+    def read_frame(self):
+        with self._lock:
+            return self._frame.copy() if self._frame is not None else None
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join(timeout=1.0)
+            self._thread = None
+        with self._lock:
+            self._frame = None
+
+
 class CameraManager:
     """Simple registry for named cameras.
 
@@ -291,6 +392,69 @@ class CameraManager:
     @classmethod
     def get_camera(cls, name: str) -> Optional[CameraSource]:
         return cls._registry.get(name)
+
+
+class ActiveCameraManager:
+    """Singleton manager ensuring only one camera is active at a time.
+
+    When a new camera is started via this manager, any previously active
+    camera is automatically stopped first.
+    """
+
+    _active_camera: Optional[CameraSource] = None
+    _active_viewer = None  # Reference to the VideoViewer using the camera
+    _lock = threading.Lock()
+
+    @classmethod
+    def start_camera(cls, camera: CameraSource, viewer=None) -> None:
+        """Start a camera, stopping any previously active camera first.
+
+        Args:
+            camera: The CameraSource to start
+            viewer: Optional VideoViewer reference for cleanup
+        """
+        with cls._lock:
+            # Stop the previous camera if one is active
+            if cls._active_camera is not None and cls._active_camera is not camera:
+                try:
+                    cls._active_camera.stop()
+                except Exception:
+                    pass
+                # Detach from previous viewer
+                if cls._active_viewer is not None:
+                    try:
+                        cls._active_viewer.attach_camera(None)
+                    except Exception:
+                        pass
+
+            # Start the new camera
+            cls._active_camera = camera
+            cls._active_viewer = viewer
+            camera.start()
+
+    @classmethod
+    def stop_camera(cls, camera: Optional[CameraSource] = None) -> None:
+        """Stop a camera. If camera is None, stops the active camera."""
+        with cls._lock:
+            target = camera if camera is not None else cls._active_camera
+            if target is not None:
+                try:
+                    target.stop()
+                except Exception:
+                    pass
+                if target is cls._active_camera:
+                    cls._active_camera = None
+                    cls._active_viewer = None
+
+    @classmethod
+    def get_active_camera(cls) -> Optional[CameraSource]:
+        """Return the currently active camera, or None."""
+        return cls._active_camera
+
+    @classmethod
+    def is_active(cls, camera: CameraSource) -> bool:
+        """Check if a specific camera is the active one."""
+        return cls._active_camera is camera
 
 
 # Register a default local camera (index 0) if OpenCV is available.

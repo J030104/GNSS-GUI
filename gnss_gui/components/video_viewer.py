@@ -14,7 +14,7 @@ import time
 from typing import Optional
 
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QPixmap, QImage
+from PyQt5.QtGui import QPixmap, QImage, QPainter, QColor
 from PyQt5.QtWidgets import (
     QWidget,
     QLabel,
@@ -72,6 +72,7 @@ class VideoViewer(QWidget):
         self.frame_generator = self._generate_placeholder_frame
         self._camera_source: Optional[CameraSource] = None
         self._show_text_placeholder = True
+        self._placeholder_text = f"{self.camera_name}\nUnavailable"
 
         # Image adjustment state
         # brightness: integer offset added to each channel (-50..50)
@@ -135,24 +136,35 @@ class VideoViewer(QWidget):
         if self._show_text_placeholder:
             # Don't update when showing text placeholder
             return
-            
         frame = self.frame_generator()
         if frame is not None:
             self.update_frame(frame)
 
-    def _show_text_placeholder_message(self) -> None:
-        """Show a text message when no video stream is active."""
-        self.label.clear()
-        self.label.setText(f"{self.camera_name}\nUnavailable")
-        self.label.setStyleSheet("""
-            QLabel {
-                background-color: #2b2b2b;
-                color: #ffffff;
-                border: 1px solid #555555;
-                font-size: 12px;
-                font-weight: bold;
-            }
-        """)
+    def _show_text_placeholder_message(self, text: str = None) -> None:
+        """Show a placeholder message rendered as a full-size dark pixmap."""
+        if text is not None:
+            self._placeholder_text = text
+        else:
+            self._placeholder_text = f"{self.camera_name}\nUnavailable"
+        self._show_text_placeholder = True
+        self._render_placeholder()
+
+    def _render_placeholder(self) -> None:
+        """Render the placeholder text onto a dark pixmap matching the label size."""
+        w = max(160, self.width())
+        h = max(120, self.height())
+        pixmap = QPixmap(w, h)
+        pixmap.fill(QColor(0x2b, 0x2b, 0x2b))
+        painter = QPainter(pixmap)
+        painter.setPen(QColor(255, 255, 255))
+        font = painter.font()
+        font.setPointSize(12)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.drawText(pixmap.rect(), Qt.AlignCenter, self._placeholder_text)
+        painter.end()
+        self.label.setStyleSheet("")
+        self.label.setPixmap(pixmap)
 
     def set_camera_name(self, name: str) -> None:
         """Set the camera name for display in placeholder."""
@@ -229,7 +241,9 @@ class VideoViewer(QWidget):
 
     def resizeEvent(self, event):  # type: ignore[override]
         """Ensure the current pixmap scales when the widget is resized."""
-        if (pixmap := self.label.pixmap()) is not None:
+        if self._show_text_placeholder:
+            self._render_placeholder()
+        elif (pixmap := self.label.pixmap()) is not None:
             self.label.setPixmap(pixmap.scaled(self.label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
         super().resizeEvent(event)
 
